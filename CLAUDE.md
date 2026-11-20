@@ -17,9 +17,13 @@
 - PC에 MS Office 설치됨, AhnLab V3 설치됨 (PyInstaller exe 오탐 가능성 주의)
 - 스택: PySide6 / PyMuPDF(`import pymupdf as fitz`) / Pillow / pillow-heif / openpyxl / pdf2docx / pywin32 / PyInstaller / Inno Setup 6
 
-## 현재 상태 (v1.9.0) — 작업목록 1~4번 완료, 5번 대부분 완료
+## 현재 상태 (v1.9.3) — 작업목록 1~5번 완료
 - v1.9.0: 자동 업데이트(app/core/updater.py, app/ui/updates.py, UPDATE_URL 또는 update_url.txt), PDF→Word(pdf2docx) 제거, 빌드는 tools/build_exe.py(모듈 제외·파일 정리·exe --selftest), tools/make_update_json.py, installer [InstallDelete] _internal + 조용한 설치 후 자동 재실행
-- 남은 것: UPDATE_URL 실제 주소 결정, 설치된 exe 에서 업데이트 버튼 클릭까지 자동 E2E 확인
+- 배포(v1.9.3~): 저장소 https://github.com/zxalw1/PdfImageEditor (공개). UPDATE_URL = releases/latest/download/update.json
+  새 버전 내는 법: 버전 올림(app/__init__.py·version_info.txt·installer.iss·build.bat) → release_notes.txt 수정 → 커밋 → `git push origin main` → `git tag vX.Y.Z` → `git push origin vX.Y.Z`
+  → Actions 가 테스트·빌드·자가진단·설치파일·update.json·릴리스까지 자동. (예전 태그 v1.0.0~v1.9.2 는 로컬에만, 올리지 말 것: 태그마다 빌드 실행됨)
+  설치된 앱은 시작 2.5초 뒤 확인 → 안내 → 받기·sha256 → /AUTOUPDATE=1 조용히 재설치 → 자동 재실행 (설치본 E2E 확인 완료)
+  CI 콘솔은 cp1252 → tools 스크립트는 stdout UTF-8 고정, workflow 에 PYTHONUTF8=1
 작업목록 4번 (v1.3.0~v1.8.0):
 - 주석(v1.4): ObjectLayer 에 도형 종류 추가(highlight/underline/rect/arrow/note), 저장 시 실제 PDF 주석으로. 형광펜·밑줄은 글자 줄에 맞춤
 - 페이지 꾸미기(v1.5): `app/core/page_deco.py` 페이지 번호·머리글/바닥글({page}{total}{date}{file})·워터마크(글자/이미지), 미리보기 대화상자
