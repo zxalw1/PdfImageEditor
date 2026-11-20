@@ -240,23 +240,111 @@ class _ThumbDelegate(QStyledItemDelegate):
         option.displayAlignment = Qt.AlignHCenter | Qt.AlignTop
 
 
+PAGES_MIME = "application/x-pdfimageeditor-pages"
+
+
 class PageList(QListWidget):
-    reordered = Signal()
+    """페이지 썸네일. 여러 장 선택 후 끌어서 이동, 파일·다른 PDF 페이지를 원하는 위치에 놓기"""
+    movedTo = Signal(list, int)          # (선택 행들, 놓은 위치 = 이 행 앞)
+    filesDroppedAt = Signal(list, int)   # (파일 경로들, 위치)
+    pagesDroppedAt = Signal(str, list, int)  # (원본 토큰, 원본 페이지들, 위치)
 
     def __init__(self):
         super().__init__()
         self.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        self.setDragDropMode(QAbstractItemView.InternalMove)
+        self.setDragDropMode(QAbstractItemView.DragDrop)
         self.setDefaultDropAction(Qt.MoveAction)
+        self.setDropIndicatorShown(True)
+        self.setAcceptDrops(True)
         self.setIconSize(QSize(120, 160))
         self.setSpacing(4)
         self.setViewMode(QListView.ListMode)
         self.setItemDelegate(_ThumbDelegate(self))
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
+    def drop_row(self, pos):
+        """놓은 지점 → 끼워 넣을 위치(그 행 앞). 항목 아래쪽 절반이면 다음 행"""
+        idx = self.indexAt(pos)
+        if not idx.isValid():
+            return self.count()
+        r = self.visualRect(idx)
+        return idx.row() + (1 if pos.y() > r.center().y() else 0)
+
+    def _accept(self, e):
+        md = e.mimeData()
+        return e.source() is self or md.hasUrls() or md.hasFormat(PAGES_MIME)
+
+    def dragEnterEvent(self, e):
+        if self._accept(e):
+            e.acceptProposedAction()
+            super().dragEnterEvent(e)
+        else:
+            e.ignore()
+
+    def dragMoveEvent(self, e):
+        if self._accept(e):
+            super().dragMoveEvent(e)
+            e.acceptProposedAction()
+        else:
+            e.ignore()
+
     def dropEvent(self, e):
-        super().dropEvent(e)
-        self.reordered.emit()
+        pos = e.position().toPoint()
+        row = self.drop_row(pos)
+        md = e.mimeData()
+        if e.source() is self:
+            rows = sorted(self.row(i) for i in self.selectedItems())
+            # 원본 목록을 Qt 가 지우지 않게 '복사'로 끝내고, 순서는 문서에서 직접 바꾼 뒤 다시 그린다
+            e.setDropAction(Qt.CopyAction)
+            e.accept()
+            self.movedTo.emit(rows, row)
+        elif md.hasFormat(PAGES_MIME):
+            import json
+            info = json.loads(bytes(md.data(PAGES_MIME)).decode("utf-8"))
+            e.setDropAction(Qt.CopyAction)
+            e.accept()
+            self.pagesDroppedAt.emit(info["token"], info["pages"], row)
+        elif md.hasUrls():
+            from app.core.utils import PDF_EXT, IMG_EXT
+            files = collect_files([u.toLocalFile() for u in md.urls()], PDF_EXT | IMG_EXT)
+            e.acceptProposedAction()
+            if files:
+                self.filesDroppedAt.emit(files, row)
+        else:
+            e.ignore()
+
+
+class SourcePageList(QListWidget):
+    """다른 PDF 의 페이지 목록 (끌어서 PageList 로 놓기)"""
+
+    def __init__(self, token):
+        super().__init__()
+        self.token = token
+        self.setViewMode(QListView.IconMode)
+        self.setResizeMode(QListView.Adjust)
+        self.setMovement(QListView.Static)
+        self.setIconSize(QSize(110, 150))
+        self.setSpacing(6)
+        self.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.setDragDropMode(QAbstractItemView.DragOnly)
+        self.setDefaultDropAction(Qt.CopyAction)
+
+    def selected_pages(self):
+        return sorted(self.row(i) for i in self.selectedItems())
+
+    def mimeData(self, items):
+        import json
+        from PySide6.QtCore import QMimeData
+        md = QMimeData()
+        pages = sorted(self.row(i) for i in items)
+        md.setData(PAGES_MIME, json.dumps({"token": self.token, "pages": pages}).encode("utf-8"))
+        return md
+
+    def mimeTypes(self):
+        return [PAGES_MIME]
+
+    def supportedDragActions(self):
+        return Qt.CopyAction
 
 
 def paint_shape(p, o, r, scale=1.0):

@@ -21,7 +21,9 @@ from app.ui.widgets import (
     PageList, PageView, DropZone, InlineTextEditor, pix_to_qimage, plain_icon, framed, icon_button,
     paint_shape,
 )
-from app.ui.dialogs import SplitDialog, ReplaceDialog, SignatureDialog, PageDecoDialog, ask_password
+from app.ui.dialogs import (
+    SplitDialog, ReplaceDialog, SignatureDialog, PageDecoDialog, PagePickerWindow, ask_password,
+)
 from app.ui.workers import run_task
 
 UNDO_LIMIT = 15
@@ -186,6 +188,7 @@ class PdfTab(QWidget):
         # 더보기
         self.a_saveas = self._act("save-as", "다른 이름 저장", self.save_as, "Ctrl+Shift+S", toolbar=False)
         self.a_deco = self._act("page-deco", "페이지 번호·머리글·워터마크…", self.page_deco, toolbar=False)
+        self.a_pick = self._act("merge", "다른 PDF에서 페이지 가져오기…", self.open_page_picker, toolbar=False)
         self.a_blank = self._act("page-add", "빈 페이지 넣기", self.insert_blank, toolbar=False)
         self.a_ext = self._act("extract", "선택 페이지 추출", self.extract, toolbar=False)
         self.a_split = self._act("split", "PDF 분할", self.split, toolbar=False)
@@ -194,6 +197,7 @@ class PdfTab(QWidget):
         menu.addSeparator()
         menu.addAction(self.a_repl)
         menu.addAction(self.a_deco)
+        menu.addAction(self.a_pick)
         menu.addAction(self.a_blank)
         menu.addAction(self.a_ext)
         menu.addAction(self.a_split)
@@ -240,7 +244,11 @@ class PdfTab(QWidget):
         self.pages = PageList()
         self.pages.setFixedWidth(184)
         self.pages.currentRowChanged.connect(lambda _: self.render_preview())
-        self.pages.reordered.connect(self.on_reordered)
+        self.pages.movedTo.connect(self.on_moved_to)
+        self.pages.filesDroppedAt.connect(self.on_files_dropped_at)
+        self.pages.pagesDroppedAt.connect(self.on_pages_dropped_at)
+        self._sources = {}              # 다른 PDF 토큰 → 문서
+        self._picker = None
         eh.addWidget(self.pages)
         self.scroll = QScrollArea(objectName="Viewer")
         self.scroll.setAlignment(Qt.AlignCenter)
@@ -268,7 +276,7 @@ class PdfTab(QWidget):
         self.setAcceptDrops(True)
         self.edit_actions = [self.a_save, self.a_saveas, self.a_rl, self.a_rr, self.a_del, self.a_blank,
                              self.a_up, self.a_dn, self.a_ext, self.a_split, self.a_text, self.a_white,
-                             self.a_repl, self.a_zin, self.a_zout, self.a_edit, self.a_deco]
+                             self.a_repl, self.a_zin, self.a_zout, self.a_edit, self.a_deco, self.a_pick]
         self.edit_widgets = [self.font_box, self.cb_zoom, self.btn_edit, self.btn_insert, self.btn_annot]
 
     def _paint_color_btn(self):
@@ -920,14 +928,68 @@ class PdfTab(QWidget):
         pdf_ops.reorder(self.doc, order)
         self.refresh([r + d for r in rows])
 
-    def on_reordered(self):
-        order = [self.pages.item(i).data(Qt.UserRole) for i in range(self.pages.count())]
-        if order == list(range(len(order))):
+    def on_moved_to(self, rows, target):
+        """썸네일 여러 장을 끌어서 target 위치로"""
+        order = pdf_ops.move_rows_to(self.doc.page_count, rows, target)
+        if order is None:
+            self.refresh(rows)
             return
-        sel = self.sel_rows()
         self.snapshot()
         pdf_ops.reorder(self.doc, order)
-        self.refresh(sel)
+        self.refresh([order.index(r) for r in sorted(rows)])
+        self.win.toast(f"{len(rows)}페이지 이동")
+
+    def on_files_dropped_at(self, files, row):
+        """탐색기에서 PDF·이미지를 썸네일 목록의 원하는 위치에 놓기"""
+        if self.doc is None:
+            self.open_files(files)
+            return
+        self.snapshot()
+        n, errs = pdf_ops.insert_files_at(self.doc, files, row, ask_password(self))
+        for name, ex in errs:
+            QMessageBox.warning(self, APP_NAME, f"{name} 추가 실패\n{ex}")
+        if n == 0:
+            self._restore(self.undo_stack.pop())
+            return
+        self.refresh(list(range(row, row + n)))
+        self.win.toast(f"{n}페이지를 {row + 1}번째 위치에 넣음")
+
+    # ── 다른 PDF 에서 페이지 가져오기 ──
+    def open_page_picker(self):
+        if self._picker is None:
+            self._picker = PagePickerWindow(self)
+            self._picker.openRequested.connect(self._picker_open)
+            self._picker.insertRequested.connect(
+                lambda tok, pages: self.on_pages_dropped_at(tok, pages, max(self.pages.currentRow(), 0) + 1))
+        self._picker.show()
+        self._picker.raise_()
+        if self._picker.token is None:
+            self._picker_open()
+
+    def _picker_open(self, path=None):
+        if path is None:
+            path, _ = QFileDialog.getOpenFileName(self._picker, "페이지를 가져올 PDF", "", PDF_FILTER)
+        if not path:
+            return
+        try:
+            src = pdf_ops.open_pdf(path, ask_password(self._picker))
+        except Exception as ex:
+            QMessageBox.warning(self._picker, APP_NAME, f"열기 실패\n{ex}")
+            return
+        token = f"src{len(self._sources) + 1}"
+        self._sources[token] = src
+        pms = [QPixmap.fromImage(pix_to_qimage(pg.get_pixmap(matrix=fitz.Matrix(0.18, 0.18), alpha=False)))
+               for pg in src]
+        self._picker.set_source(token, os.path.basename(path), pms)
+
+    def on_pages_dropped_at(self, token, pages, row):
+        src = self._sources.get(token)
+        if src is None or self.doc is None or not pages:
+            return
+        self.snapshot()
+        at = pdf_ops.insert_pages_from(self.doc, src, pages, row)
+        self.refresh(list(range(at, at + len(pages))))
+        self.win.toast(f"다른 PDF에서 {len(pages)}페이지를 {at + 1}번째 위치에 넣음")
 
     def page_deco(self):
         from app.core import page_deco as pdc

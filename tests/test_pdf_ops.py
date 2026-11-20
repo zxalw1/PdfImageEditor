@@ -48,6 +48,27 @@ def test_move_order():
     assert pdf_ops.move_order(4, [], 1) is None
 
 
+def test_move_rows_to():
+    m = pdf_ops.move_rows_to
+    assert m(5, [3], 0) == [3, 0, 1, 2, 4]
+    assert m(5, [0, 2], 5) == [1, 3, 4, 0, 2]            # 여러 장, 맨 뒤로 (순서 유지)
+    assert m(5, [1, 3], 3) == [0, 2, 1, 3, 4]            # 사이로
+    assert m(5, [4, 1], 1) == [0, 1, 4, 2, 3]
+    assert m(5, [2], 2) is None and m(5, [2], 3) is None  # 제자리
+    assert m(5, [], 0) is None
+
+
+def test_insert_pages_from_and_files(sample_pdf, sample_png):
+    doc = pdf_ops.open_pdf(sample_pdf)
+    src = pdf_ops.open_pdf(sample_pdf)
+    at = pdf_ops.insert_pages_from(doc, src, [2, 0], 1)
+    assert at == 1 and doc.page_count == 5
+    assert ["Page 1" in doc[0].get_text(), "Page 3" in doc[1].get_text(), "Page 1" in doc[2].get_text()] == [True] * 3
+    n, errs = pdf_ops.insert_files_at(doc, [sample_png, sample_pdf], 0)
+    assert n == 4 and not errs and doc.page_count == 9
+    assert not doc[0].get_text().strip() and "Page 1" in doc[1].get_text()
+
+
 def test_reorder(sample_pdf):
     doc = pdf_ops.open_pdf(sample_pdf)
     pdf_ops.reorder(doc, [2, 0, 1])

@@ -85,6 +85,35 @@ def reorder(doc, order):
     doc.select(order)
 
 
+def move_rows_to(n, rows, target):
+    """선택한 rows(여러 장)를 target 위치(0~n, 원래 순서 기준 '이 앞에')로 옮긴 순서. 변화 없으면 None"""
+    rows = sorted(set(r for r in rows if 0 <= r < n))
+    if not rows:
+        return None
+    target = max(0, min(n, target))
+    rest = [i for i in range(n) if i not in rows]
+    insert_at = sum(1 for i in rest if i < target)
+    order = rest[:insert_at] + rows + rest[insert_at:]
+    return None if order == list(range(n)) else order
+
+
+def insert_pages_from(doc, src, pages, at):
+    """src 문서의 pages(순서대로)를 doc 의 at 위치에 끼워 넣음. 넣은 첫 위치 반환"""
+    at = max(0, min(doc.page_count, at))
+    for k, p in enumerate(pages):
+        doc.insert_pdf(src, from_page=p, to_page=p, start_at=at + k)
+    return at
+
+
+def insert_files_at(doc, paths, at, password_cb=None):
+    """PDF/이미지 파일을 at 위치에 끼워 넣음. (넣은 쪽수, 오류 목록)"""
+    tmp = fitz.open()
+    errs = merge_into(tmp, paths, password_cb)
+    if tmp.page_count:
+        insert_pages_from(doc, tmp, range(tmp.page_count), at)
+    return tmp.page_count, errs
+
+
 def extract_pages(doc, rows, path):
     new = fitz.open()
     for r in rows:

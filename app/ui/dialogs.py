@@ -456,6 +456,63 @@ class PageDecoDialog(QDialog):
         self.accept()
 
 
+class PagePickerWindow(QDialog):
+    """다른 PDF 의 페이지를 골라 끌어오기 (창을 띄워둔 채 본 창의 썸네일 목록으로 드래그)"""
+    from PySide6.QtCore import Signal as _Signal
+    insertRequested = _Signal(str, list)
+    openRequested = _Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("다른 PDF에서 페이지 가져오기")
+        self.setWindowFlag(Qt.Tool, True)
+        self.setModal(False)
+        self.resize(560, 640)
+        self.token = None
+        v = QVBoxLayout(self)
+        v.setSpacing(8)
+        h = QHBoxLayout()
+        b_open = QPushButton("PDF 열기…")
+        b_open.clicked.connect(self.openRequested.emit)
+        h.addWidget(b_open)
+        self.lb_file = QLabel("열린 파일 없음", objectName="Muted")
+        h.addWidget(self.lb_file, 1)
+        v.addLayout(h)
+        hint = QLabel("페이지를 골라(Ctrl·Shift로 여러 장) 본 창 왼쪽 썸네일 목록의 원하는 위치로 끌어다 놓으세요.",
+                      objectName="Caption")
+        hint.setWordWrap(True)
+        v.addWidget(hint)
+        from app.ui.widgets import SourcePageList
+        self.lst = SourcePageList("")
+        v.addWidget(self.lst, 1)
+        hb = QHBoxLayout()
+        hb.addStretch()
+        self.b_ins = QPushButton("선택 페이지를 현재 페이지 뒤에 넣기", objectName="Primary")
+        self.b_ins.clicked.connect(self._insert)
+        hb.addWidget(self.b_ins)
+        b_close = QPushButton("닫기")
+        b_close.clicked.connect(self.close)
+        hb.addWidget(b_close)
+        v.addLayout(hb)
+
+    def set_source(self, token, name, pixmaps):
+        from PySide6.QtWidgets import QListWidgetItem
+        from app.ui.widgets import plain_icon, framed
+        self.token = token
+        self.lst.token = token
+        self.lst.clear()
+        for i, pm in enumerate(pixmaps):
+            self.lst.addItem(QListWidgetItem(plain_icon(framed(pm)), str(i + 1)))
+        self.lb_file.setText(f"{name} · {len(pixmaps)}페이지")
+
+    def _insert(self):
+        pages = self.lst.selected_pages()
+        if not self.token or not pages:
+            QMessageBox.information(self, self.windowTitle(), "가져올 페이지를 선택하세요.")
+            return
+        self.insertRequested.emit(self.token, pages)
+
+
 class ReplaceDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
