@@ -44,7 +44,8 @@ ICONS = {
                  '<path d="M3 20.5h18"/>',
     "stamp": '<path d="M9.5 4h5v3.5c0 1.5-1.5 2.2-1.5 4h-2c0-1.8-1.5-2.5-1.5-4z"/><path d="M5 14.5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v2H5z"/>'
              '<path d="M6 20h12"/>',
-    "scroll-view": '<rect x="6" y="2.5" width="12" height="8" rx="1.5"/><rect x="6" y="13.5" width="12" height="8" rx="1.5"/>'
+    "info": '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5"/><path d="M12 7.6v.1"/>',
+    "scroll-view":'<rect x="6" y="2.5" width="12" height="8" rx="1.5"/><rect x="6" y="13.5" width="12" height="8" rx="1.5"/>'
                    '<path d="M21 7v10M19.5 15.5L21 17l1.5-1.5"/>',
     "compress":'<path d="M12 3v6M9 6l3 3 3-3"/><path d="M12 21v-6M9 18l3-3 3 3"/><path d="M4 12h16"/>',
     "page-deco":f'<path d="{PAGE}"/><path d="M9.5 18h5"/><path d="M8.5 13.5l7-4"/>',

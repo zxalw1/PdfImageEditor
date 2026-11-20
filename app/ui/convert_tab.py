@@ -237,7 +237,7 @@ class Pdf2DocPanel(_Panel):
 KINDS = [("conv-pdf-img", "PDF → 이미지", "페이지를 PNG·JPG·WEBP로 저장"),
          ("conv-img-pdf", "이미지 → PDF", "사진 여러 장을 PDF 하나로"),
          ("conv-office-pdf", "문서 → PDF", "Excel·Word·PPT·한글을 PDF로"),
-         ("conv-pdf-doc", "PDF → 문서", "Word·Excel(표)·텍스트로 추출")]
+         ("conv-pdf-doc", "PDF → 문서", "Excel(표)·텍스트로 추출")]
 
 
 class ConvertTab(QWidget):

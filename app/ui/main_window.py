@@ -6,11 +6,11 @@ from PySide6.QtCore import Qt, QSize, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QFrame, QHBoxLayout, QVBoxLayout, QToolButton, QLabel,
-    QStackedWidget, QStatusBar, QButtonGroup,
+    QStackedWidget, QStatusBar, QButtonGroup, QMessageBox,
 )
 
 from app import APP_NAME, VERSION
-from app.core.utils import resource_path
+from app.core.utils import resource_path, LOG_DIR
 from app.ui import theme
 from app.ui.theme import bind_icon
 from app.ui.pdf_tab import PdfTab
@@ -44,6 +44,15 @@ class MainWindow(QMainWindow):
         for w in self.pages.values():
             self.stack.addWidget(w)
         self.go("pdf")
+        from app.ui.updates import UpdateManager
+        self.updates = UpdateManager(self)
+
+    def about(self):
+        from app.ui.updates import update_url
+        u = update_url() or "설정 안 됨"
+        QMessageBox.about(self, APP_NAME,
+                          f"<b>{APP_NAME}</b><br>버전 v{VERSION}<br><br>"
+                          f"업데이트 주소: {u}<br>오류 기록: {LOG_DIR}<br><br>© CNC International")
 
     # ── 내비게이션 ──
     def _build_nav(self):
@@ -77,6 +86,21 @@ class MainWindow(QMainWindow):
             self.nav_btns[key] = b
             v.addWidget(b, 0, Qt.AlignHCenter)
         v.addStretch()
+        from PySide6.QtWidgets import QMenu
+        self.btn_info = QToolButton(objectName="Nav")
+        bind_icon(self.btn_info, "info", 'text2', 20)
+        self.btn_info.setIconSize(QSize(20, 20))
+        self.btn_info.setText("정보")
+        self.btn_info.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        self.btn_info.setFixedSize(68, 52)
+        self.btn_info.setCursor(Qt.PointingHandCursor)
+        self.btn_info.setPopupMode(QToolButton.InstantPopup)
+        m = QMenu(self)
+        m.addAction("업데이트 확인", lambda: self.updates.check_async(manual=True))
+        m.addAction("프로그램 정보", self.about)
+        m.addAction("오류 기록 폴더 열기", lambda: os.startfile(LOG_DIR) if os.path.isdir(LOG_DIR) else None)
+        self.btn_info.setMenu(m)
+        v.addWidget(self.btn_info, 0, Qt.AlignHCenter)
         self.btn_theme = QToolButton(objectName="Nav")
         self.btn_theme.setIconSize(QSize(20, 20))
         self.btn_theme.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)

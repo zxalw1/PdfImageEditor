@@ -17,7 +17,9 @@
 - PC에 MS Office 설치됨, AhnLab V3 설치됨 (PyInstaller exe 오탐 가능성 주의)
 - 스택: PySide6 / PyMuPDF(`import pymupdf as fitz`) / Pillow / pillow-heif / openpyxl / pdf2docx / pywin32 / PyInstaller / Inno Setup 6
 
-## 현재 상태 (v1.8.0) — 작업목록 1~4번 완료, 5번(배포) 남음
+## 현재 상태 (v1.9.0) — 작업목록 1~4번 완료, 5번 대부분 완료
+- v1.9.0: 자동 업데이트(app/core/updater.py, app/ui/updates.py, UPDATE_URL 또는 update_url.txt), PDF→Word(pdf2docx) 제거, 빌드는 tools/build_exe.py(모듈 제외·파일 정리·exe --selftest), tools/make_update_json.py, installer [InstallDelete] _internal + 조용한 설치 후 자동 재실행
+- 남은 것: UPDATE_URL 실제 주소 결정, 설치된 exe 에서 업데이트 버튼 클릭까지 자동 E2E 확인
 작업목록 4번 (v1.3.0~v1.8.0):
 - 주석(v1.4): ObjectLayer 에 도형 종류 추가(highlight/underline/rect/arrow/note), 저장 시 실제 PDF 주석으로. 형광펜·밑줄은 글자 줄에 맞춤
 - 페이지 꾸미기(v1.5): `app/core/page_deco.py` 페이지 번호·머리글/바닥글({page}{total}{date}{file})·워터마크(글자/이미지), 미리보기 대화상자

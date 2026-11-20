@@ -3,6 +3,8 @@ on:
   workflow_dispatch:
   push:
     tags: ['v*']
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: windows-latest
@@ -12,23 +14,33 @@ jobs:
         with:
           python-version: '3.13'
       - name: Install
-        run: pip install -r requirements.txt pytest
+        run: pip install -r requirements.txt
       - name: Test
         run: python -m pytest -q tests
-      - name: Build EXE
-        run: >
-          pyinstaller --noconfirm --clean --windowed --name PdfImageEditor
-          --icon app\assets\app.ico --add-data "app\assets;app\assets" --version-file version_info.txt
-          --hidden-import win32timezone --hidden-import fontTools.subset --collect-submodules pdf2docx
-          --exclude-module PySide6.QtWebEngineCore --exclude-module PySide6.QtWebEngineWidgets
-          --exclude-module PySide6.Qt3DCore --exclude-module PySide6.QtQuick
-          --exclude-module PySide6.QtQml --exclude-module PySide6.QtMultimedia
-          --exclude-module tkinter main.py
+      - name: Build EXE (+ trim + self-test)
+        run: python tools/build_exe.py
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
       - name: Build Installer
-        run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss'
+        run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /Q installer.iss'
+      - name: update.json
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem dist\PdfImageEditor_Setup_v*.exe | Select-Object -First 1
+          if (Test-Path release_notes.txt) { python tools/make_update_json.py $setup.FullName --notes release_notes.txt }
+          else { python tools/make_update_json.py $setup.FullName --notes "${{ github.ref_name }}" }
       - uses: actions/upload-artifact@v4
         with:
           name: PdfImageEditor_Setup
-          path: dist/PdfImageEditor_Setup_*.exe
+          path: |
+            dist/PdfImageEditor_Setup_*.exe
+            dist/update.json
+      # 태그(v*)로 실행되면 GitHub 릴리스에 설치파일 + update.json 업로드
+      # → 업데이트 주소: https://github.com/<계정>/<저장소>/releases/latest/download/update.json (공개 저장소)
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/PdfImageEditor_Setup_*.exe
+            dist/update.json

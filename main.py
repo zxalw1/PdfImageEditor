@@ -58,6 +58,9 @@ def main():
 
     app = QApplication(sys.argv)
     apply_theme(app)
+    if len(sys.argv) > 2 and sys.argv[1] == "--selftest":      # 빌드 검증용
+        from app.selftest import run
+        sys.exit(run(sys.argv[2]))
     ico = resource_path("app", "assets", "app.ico")
     if os.path.exists(ico):
         app.setWindowIcon(QIcon(ico))
@@ -65,6 +68,10 @@ def main():
     w.show()
     if len(sys.argv) > 1 and sys.argv[1].lower().endswith('.pdf') and os.path.isfile(sys.argv[1]):
         w.pdf.load(sys.argv[1])
+    from PySide6.QtCore import QTimer
+    from app.ui.updates import show_updated_toast
+    show_updated_toast(w)
+    QTimer.singleShot(2500, w.updates.check_async)      # 시작 후 조용히 업데이트 확인
     sys.exit(app.exec())
 
 

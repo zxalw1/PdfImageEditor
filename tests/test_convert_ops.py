@@ -51,15 +51,9 @@ def test_pdf_to_xlsx_table(tmp_path):
     assert cv.pdf_to_xlsx(str(src), str(dst)) >= 1
 
 
-def test_pdf_to_docx(sample_pdf, tmp_path):
-    pytest.importorskip("pdf2docx")
-    dst = tmp_path / "o.docx"
-    cv.pdf_to_docx(sample_pdf, str(dst))
-    assert dst.stat().st_size > 0
-
-
 def test_pdfs_to_docs(sample_pdf, tmp_path):
-    outs, errs = cv.pdfs_to_docs([sample_pdf], 2, str(tmp_path / "o"))
+    assert [t[1] for t in cv.PDF_DOC_TARGETS] == ['.xlsx', '.txt']
+    outs, errs = cv.pdfs_to_docs([sample_pdf], 1, str(tmp_path / "o"))
     assert len(outs) == 1 and not errs and outs[0].endswith(".txt")
 
 

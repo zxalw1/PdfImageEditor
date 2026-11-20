@@ -31,18 +31,6 @@ def cell_value(c):
 
 
 # ── PDF → 문서 ──
-def pdf_to_docx(src, dst):
-    try:
-        from pdf2docx import Converter
-    except ImportError:
-        raise RuntimeError("pdf2docx 모듈이 없습니다 (pip install pdf2docx)")
-    cv = Converter(src)
-    try:
-        cv.convert(dst)
-    finally:
-        cv.close()
-
-
 def pdf_to_xlsx(src, dst):
     from openpyxl import Workbook
     from openpyxl.utils import get_column_letter
@@ -84,8 +72,8 @@ def pdf_to_txt(src, dst):
     doc.close()
 
 
-PDF_DOC_TARGETS = [("Word (.docx)", '.docx', pdf_to_docx),
-                   ("Excel (.xlsx) - 표 추출", '.xlsx', pdf_to_xlsx),
+# PDF→Word(pdf2docx)는 v1.9.0 에서 제거 (opencv 등 약 160MB 의존성, 배포 용량 최적화)
+PDF_DOC_TARGETS = [("Excel (.xlsx) - 표 추출", '.xlsx', pdf_to_xlsx),
                    ("텍스트 (.txt)", '.txt', pdf_to_txt)]
 
 
