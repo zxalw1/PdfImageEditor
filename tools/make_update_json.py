@@ -13,6 +13,13 @@ import re
 import sys
 
 
+for _s in (sys.stdout, sys.stderr):      # CI(영문 Windows) 콘솔에서도 한글 출력
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+
 def sha256(path):
     h = hashlib.sha256()
     with open(path, "rb") as f:

@@ -11,6 +11,12 @@ import subprocess
 import sys
 import tempfile
 
+for _s in (sys.stdout, sys.stderr):      # CI(영문 Windows) 콘솔에서도 한글·기호 출력
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NAME = "PdfImageEditor"
 DIST = os.path.join(ROOT, "dist", NAME)
