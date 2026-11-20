@@ -11,16 +11,16 @@ from PySide6.QtWidgets import (
 )
 
 from app import APP_NAME
-from app.core import pdf_ops, text_edit
+from app.core import pdf_ops, text_edit, overlay as ov
 from app.core.utils import (
-    fitz, IMG_EXT, PDF_EXT, PDF_FILTER, collect_files, human, korean_font, with_ext,
+    fitz, IMG_EXT, PDF_EXT, PDF_FILTER, IMG_FILTER, collect_files, human, korean_font, with_ext,
 )
 from app.ui import theme
 from app.ui.theme import bind_icon
 from app.ui.widgets import (
     PageList, PageView, DropZone, InlineTextEditor, pix_to_qimage, plain_icon, framed, icon_button,
 )
-from app.ui.dialogs import SplitDialog, ReplaceDialog, ask_password
+from app.ui.dialogs import SplitDialog, ReplaceDialog, SignatureDialog, ask_password
 from app.ui.workers import run_task
 
 UNDO_LIMIT = 15
@@ -40,6 +40,10 @@ class PdfTab(QWidget):
         self.zoom = 1.0
         self.color = (0, 0, 0)
         self.font = korean_font()
+        self.layer = ov.ObjectLayer()   # 삽입 이미지·서명·도장 (저장 시 PDF 에 합침)
+        self.sel_obj = None
+        self._obj_pix = {}              # 객체 id → QPixmap
+        self._pending = None            # 배치 대기 중인 (data, px_size, kind)
         self._build()
         self._update_state()
 
@@ -106,7 +110,19 @@ class PdfTab(QWidget):
         self.btn_edit.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
         self.btn_edit.setIconSize(QSize(20, 20))
         tb.addWidget(self.btn_edit)
-        self.a_white = self._act("eraser", "지우기", lambda c: self.set_mode('white' if c else None),
+        # 삽입 (이미지·서명·도장)
+        self.ins_menu = QMenu(self)
+        self.ins_menu.aboutToShow.connect(self._build_insert_menu)
+        self.btn_insert = QToolButton()
+        self.btn_insert.setText("삽입")
+        self.btn_insert.setToolTip("이미지·서명·도장 넣기 (넣은 뒤 끌어서 이동, 모서리로 크기조절, Delete로 삭제)")
+        bind_icon(self.btn_insert, "insert-image", 'text', 20)
+        self.btn_insert.setIconSize(QSize(20, 20))
+        self.btn_insert.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        self.btn_insert.setPopupMode(QToolButton.InstantPopup)
+        self.btn_insert.setMenu(self.ins_menu)
+        tb.addWidget(self.btn_insert)
+        self.a_white =self._act("eraser", "지우기", lambda c: self.set_mode('white' if c else None),
                                  checkable=True, tip="영역 지우기 (드래그)")
         self.a_repl = self._act("replace", "바꾸기", self.replace_text, "Ctrl+H", tip="텍스트 찾아 바꾸기")
         # 글자 크기·색
@@ -192,6 +208,12 @@ class PdfTab(QWidget):
         self.view.dragged.connect(self.on_white_drag)
         self.view.editRequested.connect(self.start_edit)
         self.view.emptyClicked.connect(self.on_edit_empty_click)
+        self.view.objectSelected.connect(self.on_object_selected)
+        self.view.objectChanged.connect(self.on_object_changed)
+        self.view.objectMenu.connect(self.on_object_menu)
+        self.view.placeRequested.connect(self.on_place)
+        self.view.escapePressed.connect(self.on_escape)
+        self.pages.itemPressed.connect(lambda _it: self._deselect_object())
         self._editor = None             # InlineTextEditor
         self._edit_unit = None
         self.scroll.setWidget(self.view)
@@ -204,7 +226,7 @@ class PdfTab(QWidget):
         self.edit_actions = [self.a_save, self.a_saveas, self.a_rl, self.a_rr, self.a_del, self.a_blank,
                              self.a_up, self.a_dn, self.a_ext, self.a_split, self.a_text, self.a_white,
                              self.a_repl, self.a_zin, self.a_zout, self.a_edit]
-        self.edit_widgets = [self.font_box, self.cb_zoom, self.btn_edit]
+        self.edit_widgets = [self.font_box, self.cb_zoom, self.btn_edit, self.btn_insert]
 
     def _paint_color_btn(self):
         """물방울(테마 글자색) + 아래 막대(선택한 글자 색). 검정도 다크모드에서 보이도록 막대에 테두리"""
@@ -254,8 +276,11 @@ class PdfTab(QWidget):
             return "열린 파일 없음"
         name = os.path.basename(self.path) if self.path else "새 문서"
         cur = max(self.pages.currentRow(), 0) + 1
-        return (f"{name}{' *' if self.modified else ''}    ·    페이지 {cur} / {self.doc.page_count}"
-                f"    ·    배율 {round(self.zoom * 100)}%")
+        s = (f"{name}{' *' if self.modified else ''}    ·    페이지 {cur} / {self.doc.page_count}"
+             f"    ·    배율 {round(self.zoom * 100)}%")
+        if len(self.layer):
+            s += f"    ·    삽입 객체 {len(self.layer)}개 (저장 시 PDF에 합쳐짐)"
+        return s
 
     def _update_state(self):
         has = self.doc is not None
@@ -270,17 +295,25 @@ class PdfTab(QWidget):
             self.win.set_doc_info(self.status_text())
 
     def snapshot(self):
-        self.undo_stack.append(self.doc.tobytes())
+        """실행취소 지점: PDF + 삽입 객체 레이어"""
+        self.undo_stack.append((self.doc.tobytes(), self.layer.copy()))
         if len(self.undo_stack) > UNDO_LIMIT:
             self.undo_stack.pop(0)
         self.modified = True
+
+    def _restore(self, state):
+        data, layer = state
+        self.doc = pdf_ops.doc_from_bytes(data)
+        self.layer = layer
 
     def undo(self):
         self.finish_edit(commit=False)
         if not self.undo_stack:
             return
         cur = self.pages.currentRow()
-        self.doc = pdf_ops.doc_from_bytes(self.undo_stack.pop())
+        self._restore(self.undo_stack.pop())
+        if self.layer.get(self.sel_obj) is None:
+            self.sel_obj = None
         self.refresh([min(max(cur, 0), self.doc.page_count - 1)])
 
     def sel_rows(self):
@@ -316,6 +349,9 @@ class PdfTab(QWidget):
         self.path = path
         self.modified = False
         self.undo_stack.clear()
+        self.layer = ov.ObjectLayer()
+        self.sel_obj = None
+        self._obj_pix.clear()
         self.refresh([0])
 
     def merge_files(self, files=None):
@@ -327,6 +363,8 @@ class PdfTab(QWidget):
         if self.doc is None:
             self.doc = pdf_ops.new_doc()
             self.path = None
+            self.layer = ov.ObjectLayer()
+            self.sel_obj = None
         else:
             self.snapshot()
         start = self.doc.page_count
@@ -362,14 +400,22 @@ class PdfTab(QWidget):
         return False
 
     def _write(self, path):
+        merged = len(self.layer)
+        if merged:                      # 삽입 객체를 PDF 에 합침 (실행취소로 되돌릴 수 있게 지점 저장)
+            self.snapshot()
+            self.layer.flatten(self.doc)
+            self.sel_obj = None
         try:
             size = pdf_ops.write_doc(self.doc, path)
         except Exception as ex:
             QMessageBox.warning(self, APP_NAME, f"저장 실패\n{ex}")
             return False
         self.modified = False
+        if merged:
+            self.refresh(self.sel_rows())
         self._update_state()
-        self.win.toast(f"저장 완료 · {os.path.basename(path)} ({human(size)})")
+        self.win.toast(f"저장 완료 · {os.path.basename(path)} ({human(size)})"
+                       + (f" · 삽입 객체 {merged}개 합침" if merged else ""))
         return True
 
     # ── 화면 ──
@@ -379,7 +425,16 @@ class PdfTab(QWidget):
         if self.doc is not None:
             for i, page in enumerate(self.doc):
                 pix = page.get_pixmap(matrix=fitz.Matrix(0.2, 0.2), alpha=False)
-                it = QListWidgetItem(plain_icon(framed(QPixmap.fromImage(pix_to_qimage(pix)))), f"{i + 1}")
+                pm = QPixmap.fromImage(pix_to_qimage(pix))
+                objs = self.layer.on_page(page.xref)
+                if objs:                # 썸네일에도 삽입 객체 표시
+                    p = QPainter(pm)
+                    p.setRenderHint(QPainter.SmoothPixmapTransform)
+                    for o in objs:
+                        r = o.frect() * 0.2
+                        p.drawPixmap(QRectF(r.x0, r.y0, r.width, r.height), self._pix(o), QRectF(self._pix(o).rect()))
+                    p.end()
+                it = QListWidgetItem(plain_icon(framed(pm)), f"{i + 1}")
                 it.setData(Qt.UserRole, i)
                 self.pages.addItem(it)
                 if i % 20 == 0:
@@ -417,6 +472,7 @@ class PdfTab(QWidget):
         if page is None:
             self.view.clear()
             self.view.set_edit_items([])
+            self.view.set_objects([])
             if self.doc is None:
                 self._update_status_only()
             return
@@ -432,6 +488,159 @@ class PdfTab(QWidget):
         self.view.resize(pm.size())
         self._update_status_only()
         self._load_edit_items()
+        self._load_objects()
+
+    # ── 삽입 객체 (이미지·서명·도장) ──
+    def _pix(self, o):
+        pm = self._obj_pix.get(o.id)
+        if pm is None:
+            pm = QPixmap()
+            pm.loadFromData(o.data)
+            self._obj_pix[o.id] = pm
+        return pm
+
+    def _load_objects(self):
+        page = self.current_page()
+        if page is None:
+            self.view.set_objects([])
+            return
+        z = self.zoom
+        items = [{'id': o.id, 'pix': self._pix(o), 'aspect': o.aspect,
+                  'rect': QRectF(o.rect[0] * z, o.rect[1] * z, (o.rect[2] - o.rect[0]) * z, (o.rect[3] - o.rect[1]) * z)}
+                 for o in self.layer.on_page(page.xref)]
+        if self.layer.get(self.sel_obj) is None or self.layer.get(self.sel_obj).page_xref != page.xref:
+            self.sel_obj = None
+        self.view.set_objects(items, self.sel_obj)
+
+    def _build_insert_menu(self):
+        m = self.ins_menu
+        m.clear()
+        a = m.addAction("이미지 파일 넣기…", lambda: self.insert_image_file(False))
+        bind_icon(a, "insert-image", 'text', 18)
+        a = m.addAction("도장·서명 이미지 넣기 (흰 배경 투명하게)…", lambda: self.insert_image_file(True))
+        bind_icon(a, "stamp", 'text', 18)
+        m.addSeparator()
+        a = m.addAction("서명 그리기…", self.draw_signature)
+        bind_icon(a, "signature", 'text', 18)
+        saved = ov.list_signatures()
+        sub = m.addMenu("저장된 서명")
+        sub.setEnabled(bool(saved))
+        for p in saved[:8]:
+            pm = QPixmap(p)
+            act = sub.addAction(QIcon(pm.scaled(96, 40, Qt.KeepAspectRatio, Qt.SmoothTransformation)),
+                                os.path.splitext(os.path.basename(p))[0],
+                                lambda p=p: self._insert_from_file(p, "signature"))
+            act.setIconVisibleInMenu(True)
+        sub.setStyleSheet("QMenu{icon-size:96px 40px;}")
+        if saved:
+            sub.addSeparator()
+            sub.addAction("저장된 서명 폴더 열기", lambda: os.startfile(ov.signature_dir()))
+
+    def insert_image_file(self, remove_bg=False):
+        p, _ = QFileDialog.getOpenFileName(self, "도장·서명 이미지 선택" if remove_bg else "이미지 선택", "", IMG_FILTER)
+        if p:
+            self._insert_from_file(p, "stamp" if remove_bg else "image", remove_bg)
+
+    def _insert_from_file(self, path, kind, remove_bg=False):
+        try:
+            data, size = ov.prepare_image(path, remove_bg=remove_bg)
+        except Exception as ex:
+            QMessageBox.warning(self, APP_NAME, f"이미지를 열 수 없습니다\n{ex}")
+            return
+        self.begin_place(data, size, kind)
+
+    def draw_signature(self):
+        dlg = SignatureDialog(self)
+        if dlg.exec() != QDialog.Accepted or not dlg.result_png:
+            return
+        data, size = dlg.result_png
+        if dlg.cb_save.isChecked():
+            try:
+                ov.save_signature(data)
+            except Exception:
+                pass
+        self.begin_place(data, size, "signature")
+
+    def begin_place(self, data, size, kind):
+        if self.doc is None:
+            return
+        self._pending = (data, size, kind)
+        self.set_mode('place')
+        self.view.place_aspect = size[0] / size[1]
+        self.win.toast(f"{ov.KINDS[kind]}: 페이지를 클릭하거나 드래그해서 위치·크기를 정하세요 (Esc 취소)", ms=8000)
+
+    def on_place(self, qr):
+        page = self.current_page()
+        if page is None or self._pending is None:
+            return
+        data, size, kind = self._pending
+        z = self.zoom
+        if qr.width() == 0:
+            rect = ov.default_rect(page.rect, size, center=(qr.x() / z, qr.y() / z))
+        else:
+            rect = ov.rect_from_drag(qr.left() / z, qr.top() / z, qr.right() / z, qr.bottom() / z, size[0] / size[1])
+        self._pending = None
+        self.snapshot()
+        o = self.layer.add(page.xref, rect, data, size, kind)
+        self.sel_obj = o.id
+        self.set_mode(None)
+        self.refresh([self.pages.currentRow()])
+        self.win.toast(f"{ov.KINDS[kind]} 넣음 · 끌어서 이동, 모서리로 크기조절(Shift: 비율 무시), Delete 삭제")
+
+    def on_escape(self):
+        if self.view.mode == 'place':
+            self._pending = None
+            self.set_mode(None)
+            self.win.toast("넣기 취소")
+        elif self.sel_obj is not None:
+            self._deselect_object()
+
+    def _deselect_object(self):
+        if self.sel_obj is not None:
+            self.sel_obj = None
+            self.view.set_objects(self.view.objects, None)
+
+    def on_object_selected(self, oid):
+        self.sel_obj = oid
+
+    def on_object_changed(self, oid, qr):
+        page = self.current_page()
+        o = self.layer.get(oid)
+        if page is None or o is None:
+            return
+        z = self.zoom
+        self.snapshot()
+        o.rect = (qr.left() / z, qr.top() / z, qr.right() / z, qr.bottom() / z)
+        self.layer.move(oid, 0, 0, bounds=page.rect)      # 페이지 밖으로 나가지 않게
+        self.sel_obj = oid
+        self.refresh([self.pages.currentRow()])
+
+    def on_object_menu(self, oid, gpos):
+        m = QMenu(self)
+        a = m.addAction("삭제", lambda: self.delete_object(oid))
+        a.setShortcut(QKeySequence("Delete"))
+        bind_icon(a, "trash", 'text', 18)
+        m.addAction("원래 비율로 맞추기", lambda: self.reset_aspect(oid))
+        m.exec(gpos)
+
+    def reset_aspect(self, oid):
+        o = self.layer.get(oid)
+        if o is None:
+            return
+        self.snapshot()
+        r = o.frect()
+        o.rect = (r.x0, r.y0, r.x1, r.y0 + r.width / o.aspect)
+        self.refresh([self.pages.currentRow()])
+
+    def delete_object(self, oid):
+        if self.layer.get(oid) is None:
+            return
+        self.snapshot()
+        self.layer.remove(oid)
+        self._obj_pix.pop(oid, None)
+        self.sel_obj = None
+        self.refresh([self.pages.currentRow()])
+        self.win.toast("삽입 객체 삭제")
 
     # ── 기존 글자 수정 ──
     def _view_rect(self, page, rect):
@@ -508,7 +717,7 @@ class PdfTab(QWidget):
         try:
             desc = text_edit.replace_unit(self.doc, page, unit, new, self.font)
         except Exception as ex:
-            self.doc = pdf_ops.doc_from_bytes(self.undo_stack.pop())
+            self._restore(self.undo_stack.pop())
             QMessageBox.warning(self, APP_NAME, f"글자 수정 실패\n{ex}")
             desc = None
         self.refresh([unit.page_no])
@@ -528,10 +737,20 @@ class PdfTab(QWidget):
         if not rows:
             return
         self.snapshot()
+        xrefs = {self.doc[r].xref for r in rows}
+        fixed = sum(1 for o in self.layer.items if o.page_xref in xrefs)
+        if fixed:                       # 회전하는 페이지의 삽입 객체는 먼저 PDF 에 합쳐서 함께 회전
+            self.layer.flatten(self.doc, xrefs)
+            self.sel_obj = None
         pdf_ops.rotate_pages(self.doc, rows, ang)
         self.refresh(rows)
+        if fixed:
+            self.win.toast(f"회전한 페이지의 삽입 객체 {fixed}개는 PDF에 합쳐졌습니다 (실행취소 가능)")
 
     def delete_pages(self):
+        if self.sel_obj is not None and self.layer.get(self.sel_obj) is not None:
+            self.delete_object(self.sel_obj)     # 선택된 삽입 객체가 있으면 그것을 삭제
+            return
         rows = self.sel_rows()
         if not rows:
             return
@@ -542,6 +761,7 @@ class PdfTab(QWidget):
             return
         self.snapshot()
         pdf_ops.delete_pages(self.doc, rows)
+        self.layer.drop_missing(self.doc)
         self.refresh([min(rows[0], self.doc.page_count - 1)])
 
     def insert_blank(self):
@@ -567,6 +787,10 @@ class PdfTab(QWidget):
         pdf_ops.reorder(self.doc, order)
         self.refresh(sel)
 
+    def _output_doc(self):
+        """추출·분할용: 삽입 객체가 있으면 합쳐진 사본 (편집 중 레이어는 그대로)"""
+        return ov.flattened_copy(self.doc, self.layer) if len(self.layer) else self.doc
+
     def _base_name(self):
         return os.path.splitext(os.path.basename(self.path or "문서.pdf"))[0]
 
@@ -577,7 +801,7 @@ class PdfTab(QWidget):
         p, _ = QFileDialog.getSaveFileName(self, "추출 파일 저장", f"{self._base_name()}_추출.pdf", PDF_FILTER)
         if not p:
             return
-        pdf_ops.extract_pages(self.doc, rows, p)
+        pdf_ops.extract_pages(self._output_doc(), rows, p)
         self.win.toast(f"{len(rows)}페이지 추출 완료 · {os.path.basename(p)}")
 
     def split(self):
@@ -596,9 +820,10 @@ class PdfTab(QWidget):
         if not out:
             return
         base = self._base_name()
+        src = self._output_doc()
         try:
             run_task(self, "분할 중...", len(groups),
-                     lambda t: pdf_ops.split_doc(self.doc, groups, out, base, t))
+                     lambda t: pdf_ops.split_doc(src, groups, out, base, t))
         except Exception as ex:
             QMessageBox.warning(self, APP_NAME, f"분할 실패\n{ex}")
             return
@@ -607,11 +832,17 @@ class PdfTab(QWidget):
     # ── 내용 편집 ──
     def set_mode(self, m):
         self.finish_edit(commit=True)
+        if m != 'place':
+            self._pending = None
+        if m is not None:
+            self.sel_obj = None
         self.a_text.setChecked(m == 'text')
         self.a_white.setChecked(m == 'white')
         self.a_edit.setChecked(m == 'edit')
         self.view.set_mode(m)
         self._load_edit_items()
+        if self.doc is not None:
+            self._load_objects()
 
     def pick_color(self):
         c = QColorDialog.getColor(QColor(*[int(x * 255) for x in self.color]), self, "글자 색")

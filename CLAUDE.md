@@ -17,7 +17,12 @@
 - PC에 MS Office 설치됨, AhnLab V3 설치됨 (PyInstaller exe 오탐 가능성 주의)
 - 스택: PySide6 / PyMuPDF(`import pymupdf as fitz`) / Pillow / pillow-heif / openpyxl / pdf2docx / pywin32 / PyInstaller / Inno Setup 6
 
-## 현재 상태 (v1.2.0)
+## 현재 상태 (v1.3.0)
+이미지·서명·도장 삽입(작업목록 4번 중 1번 + 4번의 객체 관리 일부): `app/core/overlay.py` ObjectLayer
+(페이지 xref 기준·회전 후 좌표, 저장/추출/분할 시 flatten, 회전하는 페이지는 먼저 합침), 실행취소는 (PDF bytes, 레이어) 쌍.
+UI: 툴바 "삽입" 메뉴(이미지 / 도장·서명 이미지 흰 배경 제거 / 서명 그리기 / 저장된 서명), 클릭=기본 크기·드래그=크기 지정,
+선택 후 끌어 이동·모서리 크기조절(Shift 비율 무시)·Delete·오른쪽 클릭 메뉴. 저장된 서명: `%LOCALAPPDATA%\PdfImageEditor\signatures`
+
 기존 텍스트 직접 수정(작업목록 3번 완료): `app/core/text_edit.py` (줄/문단 단위 추출, 원본 글꼴 재사용→기본14→맑은 고딕(굵게 유지) 대체,
 배경·표 선 유지하며 글자만 지움), UI는 PDF 편집 툴바 "글자 수정"(Ctrl+E, ▾ 줄/문단). 찾아 바꾸기도 같은 엔진으로 줄 단위 재작성.
 저장 시 글꼴 서브셋(사본에서 수행) → 맑은 고딕 전체(13MB) 내장 방지.

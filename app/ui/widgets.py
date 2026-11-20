@@ -2,7 +2,7 @@
 """공용 위젯·헬퍼"""
 import os
 
-from PySide6.QtCore import Qt, QSize, QRect, QPoint, Signal
+from PySide6.QtCore import Qt, QSize, QRect, QRectF, QPoint, QPointF, Signal
 from PySide6.QtGui import QPixmap, QImage, QIcon, QPainter, QPen, QColor
 from PySide6.QtWidgets import (
     QApplication, QListWidget, QListWidgetItem, QAbstractItemView, QLabel, QListView,
@@ -265,21 +265,140 @@ class PageView(QLabel):
     dragged = Signal(QRect)
     editRequested = Signal(object)      # 클릭한 텍스트 단위 (edit 모드)
     emptyClicked = Signal()             # edit 모드에서 글자 없는 곳 클릭
+    # 삽입 객체 (mode None 일 때 선택·이동·크기조절)
+    objectSelected = Signal(object)     # id 또는 None
+    objectChanged = Signal(int, QRectF)  # id, 새 사각형(화면 px)
+    objectMenu = Signal(int, QPoint)    # 오른쪽 클릭 (id, 전역 좌표)
+    placeRequested = Signal(QRectF)     # place 모드: 클릭(크기 0) 또는 드래그한 사각형
+    escapePressed = Signal()
+    HANDLE = 9
 
     def __init__(self):
         super().__init__()
         self.setObjectName("PageView")
         self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.ClickFocus)
         self.mode = None
         self._start = None
         self._cur = None
         self.edit_items = []            # [(QRectF 화면 좌표, unit)]
         self._hover = None
+        self.objects = []               # [{'id', 'rect': QRectF, 'pix': QPixmap, 'aspect'}]
+        self.sel_id = None
+        self._drag = None               # ('move'|'tl'|'tr'|'bl'|'br', id, 시작점, 원래 rect)
+        self._ghost = None              # 끌고 있는 동안의 사각형
+        self.place_aspect = 1.0
 
     def set_mode(self, m):
         self.mode = m
         self._hover = None
-        self.setCursor(Qt.CrossCursor if m in ('text', 'white') else Qt.ArrowCursor)
+        self._drag = self._ghost = None
+        self.setCursor(Qt.CrossCursor if m in ('text', 'white', 'place') else Qt.ArrowCursor)
+        if m == 'place':
+            self.setFocus()
+        self.update()
+
+    # ── 삽입 객체 ──
+    def set_objects(self, objs, sel_id=None):
+        self.objects = objs
+        self.sel_id = sel_id if any(o['id'] == sel_id for o in objs) else None
+        self._drag = self._ghost = None
+        self.update()
+
+    def _obj(self, oid):
+        return next((o for o in self.objects if o['id'] == oid), None)
+
+    def _handles(self, r):
+        h = self.HANDLE
+        return {k: QRectF(p.x() - h / 2, p.y() - h / 2, h, h) for k, p in
+                (("tl", r.topLeft()), ("tr", r.topRight()), ("bl", r.bottomLeft()), ("br", r.bottomRight()))}
+
+    def _object_hit(self, pos):
+        """(동작, id): 선택된 객체의 모서리 → 크기조절, 객체 내부 → 이동"""
+        sel = self._obj(self.sel_id)
+        if sel:
+            for k, hr in self._handles(sel['rect']).items():
+                if hr.adjusted(-3, -3, 3, 3).contains(pos):
+                    return k, sel['id']
+        for o in reversed(self.objects):
+            if o['rect'].contains(pos):
+                return 'move', o['id']
+        return None, None
+
+    def _drag_rect(self, pos, free=False):
+        kind, oid, p0, r0 = self._drag
+        if kind == 'move':
+            d = pos - p0
+            return r0.translated(d.x(), d.y())
+        o = self._obj(oid)
+        ax = r0.right() if 'l' in kind else r0.left()
+        ay = r0.bottom() if 't' in kind else r0.top()
+        w = max(8.0, abs(pos.x() - ax))
+        h = max(8.0, abs(pos.y() - ay))
+        if not free:
+            a = o['aspect']
+            if w / h > a:
+                w = h * a
+            else:
+                h = w / a
+        x0 = ax - w if 'l' in kind else ax
+        y0 = ay - h if 't' in kind else ay
+        return QRectF(x0, y0, w, h)
+
+    def keyPressEvent(self, e):
+        if e.key() == Qt.Key_Escape:
+            self.escapePressed.emit()
+            return
+        super().keyPressEvent(e)
+
+    def contextMenuEvent(self, e):
+        if self.mode is None:
+            _k, oid = self._object_hit(QPointF(e.pos()))
+            if oid is not None:
+                self.sel_id = oid
+                self.objectSelected.emit(oid)
+                self.update()
+                self.objectMenu.emit(oid, e.globalPos())
+                return
+        super().contextMenuEvent(e)
+
+    def _press_object(self, e):
+        pos = e.position()
+        kind, oid = self._object_hit(pos)
+        if oid is None:
+            if self.sel_id is not None:
+                self.sel_id = None
+                self.objectSelected.emit(None)
+                self.update()
+            return
+        if oid != self.sel_id:
+            self.sel_id = oid
+            self.objectSelected.emit(oid)
+        self._drag = (kind, oid, pos, QRectF(self._obj(oid)['rect']))
+        self._ghost = QRectF(self._drag[3])
+        self.update()
+
+    def _move_object(self, e):
+        pos = e.position()
+        if self._drag:
+            self._ghost = self._drag_rect(pos, bool(e.modifiers() & Qt.ShiftModifier))
+            self.update()
+            return
+        kind, _oid = self._object_hit(pos)
+        cur = {None: Qt.ArrowCursor, 'move': Qt.SizeAllCursor, 'tl': Qt.SizeFDiagCursor,
+               'br': Qt.SizeFDiagCursor, 'tr': Qt.SizeBDiagCursor, 'bl': Qt.SizeBDiagCursor}[kind]
+        self.setCursor(cur)
+
+    def _release_object(self, e):
+        if not self._drag:
+            return
+        kind, oid, p0, r0 = self._drag
+        # 놓는 위치로 최종 계산 (이동 이벤트가 덜 왔어도 정확하게)
+        g = self._drag_rect(e.position(), bool(e.modifiers() & Qt.ShiftModifier))
+        self._drag = self._ghost = None
+        if g is not None and (abs(g.x() - r0.x()) > 0.5 or abs(g.y() - r0.y()) > 0.5
+                              or abs(g.width() - r0.width()) > 0.5 or abs(g.height() - r0.height()) > 0.5):
+            self.objectChanged.emit(oid, g)
         self.update()
 
     def set_edit_items(self, items):
@@ -292,6 +411,9 @@ class PageView(QLabel):
         return min(hits, key=lambda it: it[0].width() * it[0].height()) if hits else None
 
     def mousePressEvent(self, e):
+        if self.mode is None and e.button() == Qt.LeftButton:
+            self._press_object(e)          # 삽입 객체 선택·이동·크기조절
+            return
         if self.mode == 'edit' and e.button() == Qt.LeftButton:
             it = self.item_at(e.position())
             if it:
@@ -304,6 +426,9 @@ class PageView(QLabel):
             self.update()
 
     def mouseMoveEvent(self, e):
+        if self.mode is None and self.objects:
+            self._move_object(e)
+            return
         if self.mode == 'edit':
             it = self.item_at(e.position())
             if it is not self._hover:
@@ -323,20 +448,63 @@ class PageView(QLabel):
         super().leaveEvent(e)
 
     def mouseReleaseEvent(self, e):
+        if self.mode is None:
+            self._release_object(e)
+            return
         if self._start is None:
             return
         s, c = self._start, e.position().toPoint()
         self._start = self._cur = None
         self.update()
-        if self.mode == 'text':
+        if self.mode == 'place':
+            r = QRectF(QPointF(s), QPointF(c)).normalized()
+            if r.width() < 8 or r.height() < 8:
+                r = QRectF(QPointF(s), QPointF(s))          # 클릭 = 기본 크기로 그 자리에
+            self.placeRequested.emit(r)
+        elif self.mode == 'text':
             self.clicked.emit(s)
         elif self.mode == 'white':
             r = QRect(s, c).normalized()
             if r.width() > 3 and r.height() > 3:
                 self.dragged.emit(r)
 
+    def _paint_objects(self, p):
+        if not self.objects:
+            return
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
+        acc = QColor(theme.C['accent'])
+        for o in self.objects:
+            r = o['rect']
+            if self._ghost is not None and self._drag and self._drag[1] == o['id']:
+                p.setOpacity(0.35)                     # 원래 자리는 흐리게
+                p.drawPixmap(r, o['pix'], QRectF(o['pix'].rect()))
+                p.setOpacity(1.0)
+                r = self._ghost
+            p.drawPixmap(r, o['pix'], QRectF(o['pix'].rect()))
+            if o['id'] == self.sel_id and self.mode is None:
+                p.setPen(QPen(acc, 1.5, Qt.DashLine))
+                p.setBrush(Qt.NoBrush)
+                p.drawRect(r)
+                p.setPen(QPen(acc, 1.5))
+                p.setBrush(QColor("#FFFFFF"))
+                for hr in self._handles(r).values():
+                    p.drawRect(hr)
+
     def paintEvent(self, e):
         super().paintEvent(e)
+        if self.objects:
+            p = QPainter(self)
+            self._paint_objects(p)
+            p.end()
+        if self.mode == 'place' and self._start is not None:
+            p = QPainter(self)
+            acc = QColor(theme.C['accent'])
+            fill = QColor(acc)
+            fill.setAlpha(30)
+            p.setPen(QPen(acc, 1.5, Qt.DashLine))
+            p.setBrush(fill)
+            p.drawRect(QRect(self._start, self._cur).normalized())
+            p.end()
         if self.mode == 'white' and self._start is not None:
             p = QPainter(self)
             p.setPen(QPen(QColor(theme.C['danger']), 1.5, Qt.DashLine))
