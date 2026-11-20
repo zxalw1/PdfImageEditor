@@ -26,9 +26,21 @@ def doc_from_bytes(data):
     return fitz.open(stream=data, filetype="pdf")
 
 
-def doc_to_bytes(doc):
-    """저장용 (압축·정리)"""
-    return doc.tobytes(garbage=3, deflate=True, deflate_images=True, deflate_fonts=True)
+def doc_to_bytes(doc, subset=True):
+    """저장용 (압축·정리). 글꼴 서브셋은 사본에서 수행 → 편집 중인 doc 의 글꼴은 그대로(이후 추가 입력에 영향 없음)
+    예: 맑은 고딕 전체(약 13MB)가 들어간 문서 → 사용한 글자만 남김"""
+    data = doc.tobytes(garbage=3, deflate=True, deflate_images=True, deflate_fonts=True)
+    if not subset:
+        return data
+    try:
+        tmp = fitz.open(stream=data, filetype="pdf")
+        tmp.subset_fonts()
+        sub = tmp.tobytes(garbage=3, deflate=True, deflate_images=True, deflate_fonts=True)
+        if 0 < len(sub) < len(data):
+            return sub
+    except Exception:
+        pass
+    return data
 
 
 def write_doc(doc, path):
@@ -126,10 +138,17 @@ def redact_rect(page, rect):
 
 
 def replace_text(doc, rows, old, new, font=None):
-    """찾아 바꾸기. 바뀐 건수 반환"""
+    """찾아 바꾸기. 바뀐 건수 반환
+    1차: 검색어가 든 줄 전체를 원래 글꼴·크기·색으로 다시 씀 (글자 길이가 달라도 겹치지 않음)
+    2차: 줄 안에서 못 찾은 경우(줄을 넘는 검색어 등)만 기존 방식(영역 지우고 덮어쓰기)"""
+    from . import text_edit
     cnt = 0
     for r in rows:
         page = doc[r]
+        n = text_edit.replace_in_lines(doc, page, old, new, font)
+        if n:
+            cnt += n
+            continue
         hits = page.search_for(old)
         if not hits:
             continue

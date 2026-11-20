@@ -2,7 +2,7 @@
 """PDF 편집 탭"""
 import os
 
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QRectF
 from PySide6.QtGui import QPixmap, QColor, QAction, QKeySequence, QPainter, QIcon
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QToolBar, QToolButton, QLabel, QSpinBox,
@@ -11,13 +11,15 @@ from PySide6.QtWidgets import (
 )
 
 from app import APP_NAME
-from app.core import pdf_ops
+from app.core import pdf_ops, text_edit
 from app.core.utils import (
     fitz, IMG_EXT, PDF_EXT, PDF_FILTER, collect_files, human, korean_font, with_ext,
 )
 from app.ui import theme
 from app.ui.theme import bind_icon
-from app.ui.widgets import PageList, PageView, DropZone, pix_to_qimage, plain_icon, framed, icon_button
+from app.ui.widgets import (
+    PageList, PageView, DropZone, InlineTextEditor, pix_to_qimage, plain_icon, framed, icon_button,
+)
 from app.ui.dialogs import SplitDialog, ReplaceDialog, ask_password
 from app.ui.workers import run_task
 
@@ -83,6 +85,27 @@ class PdfTab(QWidget):
         # 편집
         self.a_text = self._act("text-add", "텍스트", lambda c: self.set_mode('text' if c else None),
                                 checkable=True, tip="텍스트 추가 (페이지를 클릭)")
+        # 글자 수정 (기존 텍스트 직접 수정) + 단위 선택 메뉴
+        self.a_edit = QAction("글자 수정", self)
+        bind_icon(self.a_edit, "text-edit", 'text', 20)
+        self.a_edit.setCheckable(True)
+        self.a_edit.setShortcut(QKeySequence("Ctrl+E"))
+        self.a_edit.setToolTip("기존 글자 수정 (Ctrl+E) · 글자를 클릭하면 그 자리에서 고칩니다")
+        self.a_edit.triggered.connect(lambda c: self.set_mode('edit' if c else None))
+        self.edit_level = text_edit.LINE
+        lv_menu = QMenu(self)
+        self.a_lv_line = lv_menu.addAction("줄 단위로 선택", lambda: self.set_edit_level(text_edit.LINE))
+        self.a_lv_block = lv_menu.addAction("문단 단위로 선택", lambda: self.set_edit_level(text_edit.BLOCK))
+        for a in (self.a_lv_line, self.a_lv_block):
+            a.setCheckable(True)
+        self.a_lv_line.setChecked(True)
+        self.btn_edit = QToolButton()
+        self.btn_edit.setDefaultAction(self.a_edit)
+        self.btn_edit.setMenu(lv_menu)
+        self.btn_edit.setPopupMode(QToolButton.MenuButtonPopup)
+        self.btn_edit.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        self.btn_edit.setIconSize(QSize(20, 20))
+        tb.addWidget(self.btn_edit)
         self.a_white = self._act("eraser", "지우기", lambda c: self.set_mode('white' if c else None),
                                  checkable=True, tip="영역 지우기 (드래그)")
         self.a_repl = self._act("replace", "바꾸기", self.replace_text, "Ctrl+H", tip="텍스트 찾아 바꾸기")
@@ -96,7 +119,7 @@ class PdfTab(QWidget):
         self.sp_font.setValue(12)
         self.sp_font.setSuffix(" pt")
         self.sp_font.setToolTip("글자 크기")
-        self.sp_font.setFixedWidth(74)
+        self.sp_font.setFixedWidth(70)
         fh.addWidget(self.sp_font)
         self.btn_color = QToolButton()
         self.btn_color.setToolTip("글자 색")
@@ -133,7 +156,7 @@ class PdfTab(QWidget):
         self.cb_zoom = QComboBox()
         self.cb_zoom.addItems(ZOOMS)
         self.cb_zoom.setCurrentText(FIT)
-        self.cb_zoom.setFixedWidth(96)
+        self.cb_zoom.setFixedWidth(92)
         self.cb_zoom.currentTextChanged.connect(lambda _: self.render_preview())
         tb.addWidget(self.cb_zoom)
         self.a_zin = self._act("zoom-in", "", lambda: self.step_zoom(1), "Ctrl+=", tip="확대")
@@ -167,6 +190,10 @@ class PdfTab(QWidget):
         self.view = PageView()
         self.view.clicked.connect(self.on_text_click)
         self.view.dragged.connect(self.on_white_drag)
+        self.view.editRequested.connect(self.start_edit)
+        self.view.emptyClicked.connect(self.on_edit_empty_click)
+        self._editor = None             # InlineTextEditor
+        self._edit_unit = None
         self.scroll.setWidget(self.view)
         self.scroll.setWidgetResizable(False)
         eh.addWidget(self.scroll, 1)
@@ -176,8 +203,8 @@ class PdfTab(QWidget):
         self.setAcceptDrops(True)
         self.edit_actions = [self.a_save, self.a_saveas, self.a_rl, self.a_rr, self.a_del, self.a_blank,
                              self.a_up, self.a_dn, self.a_ext, self.a_split, self.a_text, self.a_white,
-                             self.a_repl, self.a_zin, self.a_zout]
-        self.edit_widgets = [self.font_box, self.cb_zoom]
+                             self.a_repl, self.a_zin, self.a_zout, self.a_edit]
+        self.edit_widgets = [self.font_box, self.cb_zoom, self.btn_edit]
 
     def _paint_color_btn(self):
         """물방울(테마 글자색) + 아래 막대(선택한 글자 색). 검정도 다크모드에서 보이도록 막대에 테두리"""
@@ -249,6 +276,7 @@ class PdfTab(QWidget):
         self.modified = True
 
     def undo(self):
+        self.finish_edit(commit=False)
         if not self.undo_stack:
             return
         cur = self.pages.currentRow()
@@ -262,6 +290,7 @@ class PdfTab(QWidget):
         return rows
 
     def confirm_discard(self):
+        self.finish_edit(commit=True)
         if self.doc is None or not self.modified:
             return True
         r = QMessageBox.question(self, APP_NAME, "변경 내용을 저장할까요?",
@@ -311,6 +340,7 @@ class PdfTab(QWidget):
         self.refresh([min(start, self.doc.page_count - 1)])
 
     def save(self):
+        self.finish_edit(commit=True)
         if self.doc is None:
             return False
         if not self.path:
@@ -318,6 +348,7 @@ class PdfTab(QWidget):
         return self._write(self.path)
 
     def save_as(self):
+        self.finish_edit(commit=True)
         if self.doc is None:
             return False
         p, _ = QFileDialog.getSaveFileName(self, "다른 이름 저장", self.path or "편집본.pdf", PDF_FILTER)
@@ -381,9 +412,11 @@ class PdfTab(QWidget):
         self.cb_zoom.setCurrentIndex(i)
 
     def render_preview(self):
+        self.finish_edit(commit=True)      # 페이지·배율이 바뀌면 열린 편집은 반영하고 닫음
         page = self.current_page()
         if page is None:
             self.view.clear()
+            self.view.set_edit_items([])
             if self.doc is None:
                 self._update_status_only()
             return
@@ -398,6 +431,89 @@ class PdfTab(QWidget):
         self.view.setPixmap(pm)
         self.view.resize(pm.size())
         self._update_status_only()
+        self._load_edit_items()
+
+    # ── 기존 글자 수정 ──
+    def _view_rect(self, page, rect):
+        r = fitz.Rect(rect) * page.rotation_matrix * fitz.Matrix(self.zoom, self.zoom)
+        return QRectF(r.x0, r.y0, r.width, r.height)
+
+    def _load_edit_items(self):
+        page = self.current_page()
+        if self.view.mode != 'edit' or page is None:
+            self.view.set_edit_items([])
+            return
+        units = text_edit.text_units(page, self.edit_level)
+        self.view.set_edit_items([(self._view_rect(page, u.bbox), u) for u in units])
+        if not units:
+            self.win.toast("텍스트가 없는 페이지입니다 (스캔 이미지는 글자 수정 불가)", error=True)
+
+    def set_edit_level(self, level):
+        self.edit_level = level
+        self.a_lv_line.setChecked(level == text_edit.LINE)
+        self.a_lv_block.setChecked(level == text_edit.BLOCK)
+        if self.view.mode != 'edit':
+            self.set_mode('edit')
+        else:
+            self.finish_edit(commit=True)
+            self._load_edit_items()
+
+    def on_edit_empty_click(self):
+        if self._editor is not None:
+            self.finish_edit(commit=True)
+            return
+        page = self.current_page()
+        if page is not None and not text_edit.page_has_text(page):
+            QMessageBox.information(self, APP_NAME,
+                                    "텍스트가 없는 페이지입니다.\n스캔한 이미지 PDF는 글자를 수정할 수 없습니다.")
+
+    def start_edit(self, unit):
+        if self._editor is not None:
+            same = unit is self._edit_unit
+            self.finish_edit(commit=True)
+            if same:
+                return
+            # 반영 후 페이지가 다시 그려졌으므로 같은 위치의 새 단위를 찾는다
+            page = self.current_page()
+            c = unit.bbox
+            unit = text_edit.unit_at(text_edit.text_units(page, self.edit_level), (c.x0 + c.x1) / 2, (c.y0 + c.y1) / 2)
+            if unit is None:
+                return
+        page = self.current_page()
+        vr = self._view_rect(page, unit.bbox)
+        col = QColor(*[int(x * 255) for x in unit.color]).name()
+        ed = InlineTextEditor(self.view, unit.text, unit.size * self.zoom, col,
+                              theme.ui_font_family(), vr.width() + 24)
+        ed.committed.connect(lambda _t: self.finish_edit(commit=True))
+        ed.cancelled.connect(lambda: self.finish_edit(commit=False))
+        x = int(max(0, min(vr.x() - 6, self.view.width() - ed.width())))
+        y = int(max(0, vr.y() - 6))
+        ed.move(x, y)
+        self._editor, self._edit_unit = ed, unit
+        ed.focus()
+        self.scroll.ensureVisible(x + ed.width() // 2, y + ed.height(), 40, 40)
+
+    def finish_edit(self, commit=True):
+        ed, unit = self._editor, self._edit_unit
+        if ed is None:
+            return
+        self._editor = self._edit_unit = None
+        new = ed.ed.toPlainText()
+        ed.hide()
+        ed.deleteLater()
+        if not commit or new.rstrip("\n") == unit.text:
+            return
+        page = self.doc[unit.page_no]
+        self.snapshot()
+        try:
+            desc = text_edit.replace_unit(self.doc, page, unit, new, self.font)
+        except Exception as ex:
+            self.doc = pdf_ops.doc_from_bytes(self.undo_stack.pop())
+            QMessageBox.warning(self, APP_NAME, f"글자 수정 실패\n{ex}")
+            desc = None
+        self.refresh([unit.page_no])
+        if desc:
+            self.win.toast(f"글자 수정 완료 · {desc}")
 
     def _update_status_only(self):
         if self.win.stack.currentWidget() in (None, self):
@@ -490,9 +606,12 @@ class PdfTab(QWidget):
 
     # ── 내용 편집 ──
     def set_mode(self, m):
+        self.finish_edit(commit=True)
         self.a_text.setChecked(m == 'text')
         self.a_white.setChecked(m == 'white')
+        self.a_edit.setChecked(m == 'edit')
         self.view.set_mode(m)
+        self._load_edit_items()
 
     def pick_color(self):
         c = QColorDialog.getColor(QColor(*[int(x * 255) for x in self.color]), self, "글자 색")

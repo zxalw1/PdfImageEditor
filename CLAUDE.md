@@ -17,7 +17,12 @@
 - PC에 MS Office 설치됨, AhnLab V3 설치됨 (PyInstaller exe 오탐 가능성 주의)
 - 스택: PySide6 / PyMuPDF(`import pymupdf as fitz`) / Pillow / pillow-heif / openpyxl / pdf2docx / pywin32 / PyInstaller / Inno Setup 6
 
-## 현재 상태 (v1.1.1)
+## 현재 상태 (v1.2.0)
+기존 텍스트 직접 수정(작업목록 3번 완료): `app/core/text_edit.py` (줄/문단 단위 추출, 원본 글꼴 재사용→기본14→맑은 고딕(굵게 유지) 대체,
+배경·표 선 유지하며 글자만 지움), UI는 PDF 편집 툴바 "글자 수정"(Ctrl+E, ▾ 줄/문단). 찾아 바꾸기도 같은 엔진으로 줄 단위 재작성.
+저장 시 글꼴 서브셋(사본에서 수행) → 맑은 고딕 전체(13MB) 내장 방지.
+※ 서브셋 글꼴(대부분의 실제 PDF)은 유니코드 대응표가 없어 원본 글꼴 재사용 불가 → 맑은 고딕으로 대체됨(정상 동작)
+
 진입점 `main.py` + `app/` 패키지 (작업목록 1번 구조, v1.0.0 단일 파일은 git 태그 `v1.0.0`).
 `app/core`는 Qt 없음(pytest 대상), 무거운 작업은 `app/ui/workers.py`의 `run_task()`(QThread+진행률/취소).
 UI(작업목록 2번 완료): `app/ui/theme.py` 색 토큰(LIGHT/DARK)·QSS·`bind_icon()`(테마 전환 시 자동 재착색), 다크모드 설정은 QSettings 저장.

@@ -260,29 +260,67 @@ class PageList(QListWidget):
 
 
 class PageView(QLabel):
+    """페이지 미리보기. 모드: None / 'text'(클릭 위치에 추가) / 'white'(드래그 지우기) / 'edit'(기존 글자 수정)"""
     clicked = Signal(QPoint)
     dragged = Signal(QRect)
+    editRequested = Signal(object)      # 클릭한 텍스트 단위 (edit 모드)
+    emptyClicked = Signal()             # edit 모드에서 글자 없는 곳 클릭
 
     def __init__(self):
         super().__init__()
         self.setObjectName("PageView")
+        self.setMouseTracking(True)
         self.mode = None
         self._start = None
         self._cur = None
+        self.edit_items = []            # [(QRectF 화면 좌표, unit)]
+        self._hover = None
 
     def set_mode(self, m):
         self.mode = m
-        self.setCursor(Qt.CrossCursor if m else Qt.ArrowCursor)
+        self._hover = None
+        self.setCursor(Qt.CrossCursor if m in ('text', 'white') else Qt.ArrowCursor)
+        self.update()
+
+    def set_edit_items(self, items):
+        self.edit_items = items
+        self._hover = None
+        self.update()
+
+    def item_at(self, pos):
+        hits = [it for it in self.edit_items if it[0].adjusted(-2, -2, 2, 2).contains(pos)]
+        return min(hits, key=lambda it: it[0].width() * it[0].height()) if hits else None
 
     def mousePressEvent(self, e):
+        if self.mode == 'edit' and e.button() == Qt.LeftButton:
+            it = self.item_at(e.position())
+            if it:
+                self.editRequested.emit(it[1])
+            else:
+                self.emptyClicked.emit()
+            return
         if self.mode and e.button() == Qt.LeftButton:
             self._start = self._cur = e.position().toPoint()
             self.update()
 
     def mouseMoveEvent(self, e):
+        if self.mode == 'edit':
+            it = self.item_at(e.position())
+            if it is not self._hover:
+                self._hover = it
+                self.setCursor(Qt.IBeamCursor if it else Qt.ArrowCursor)
+                self.setToolTip("클릭해서 글자 수정" if it else "")
+                self.update()
+            return
         if self._start is not None:
             self._cur = e.position().toPoint()
             self.update()
+
+    def leaveEvent(self, e):
+        if self._hover is not None:
+            self._hover = None
+            self.update()
+        super().leaveEvent(e)
 
     def mouseReleaseEvent(self, e):
         if self._start is None:
@@ -305,6 +343,104 @@ class PageView(QLabel):
             p.setBrush(QColor(255, 255, 255, 170))
             p.drawRect(QRect(self._start, self._cur).normalized())
             p.end()
+        elif self.mode == 'edit' and self.edit_items:
+            p = QPainter(self)
+            p.setRenderHint(QPainter.Antialiasing)
+            acc = QColor(theme.C['accent'])
+            faint = QColor(acc)
+            faint.setAlpha(70)
+            p.setPen(QPen(faint, 1, Qt.DotLine))
+            p.setBrush(Qt.NoBrush)
+            for r, _u in self.edit_items:          # 수정 가능한 영역 옅게 표시
+                p.drawRect(r.adjusted(-1, -1, 1, 1))
+            if self._hover:
+                fill = QColor(acc)
+                fill.setAlpha(28)
+                p.setPen(QPen(acc, 1.5, Qt.DashLine))
+                p.setBrush(fill)
+                p.drawRoundedRect(self._hover[0].adjusted(-2, -2, 2, 2), 3, 3)
+            p.end()
+
+
+class InlineTextEditor(QFrame):
+    """페이지 위 제자리 편집 상자. Ctrl+Enter 확인 / Esc 취소"""
+    committed = Signal(str)
+    cancelled = Signal()
+
+    def __init__(self, parent, text, px_size, color, family, min_width):
+        super().__init__(parent, objectName="InlineEditor")
+        from PySide6.QtWidgets import QPlainTextEdit
+        from PySide6.QtGui import QFont, QFontMetrics
+        px = max(11, int(round(px_size)))
+        # 전역 QSS 의 font-size 가 setFont 를 덮어쓰므로 스타일시트로 크기 지정 (원본 글자 크기와 맞춤)
+        self.setStyleSheet(
+            f"QFrame#InlineEditor{{background:{theme.C['surface']};border:1.5px solid {theme.C['accent']};"
+            f"border-radius:6px;}}"
+            f"QPlainTextEdit{{background:#FFFFFF;border:none;padding:0;color:{color};"
+            f"font-family:'{family}';font-size:{px}px;"
+            f"selection-background-color:{theme.C['accent']};}}")
+        v = QVBoxLayout(self)
+        v.setContentsMargins(3, 3, 3, 3)
+        v.setSpacing(3)
+        self.ed = QPlainTextEdit()
+        f = QFont(family)
+        f.setPixelSize(px)
+        self.ed.setFont(f)
+        self.ed.setPlainText(text)
+        self.ed.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.ed.installEventFilter(self)
+        v.addWidget(self.ed)
+        bar = QHBoxLayout()
+        bar.setSpacing(4)
+        hint = QLabel("Ctrl+Enter 확인 · Esc 취소", objectName="Caption")
+        bar.addWidget(hint)
+        bar.addStretch()
+        b_no = QPushButton("취소")
+        b_no.clicked.connect(self.cancelled.emit)
+        b_ok = QPushButton("확인", objectName="Primary")
+        b_ok.setStyleSheet("padding:4px 12px;")
+        b_ok.clicked.connect(self.commit)
+        for b in (b_no, b_ok):
+            b.setCursor(Qt.PointingHandCursor)
+            bar.addWidget(b)
+        v.addLayout(bar)
+        self.ed.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.ed.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._fm = QFontMetrics(f)
+        self._min_w = min_width
+        self.ed.textChanged.connect(self._fit)
+        self._fit()
+
+    def _fit(self):
+        """입력에 맞춰 상자 크기 자동 조절 (스크롤 없이 전체 내용 보이게)"""
+        fm = self._fm
+        lines = self.ed.toPlainText().split("\n") or [""]
+        w = max(self._min_w, max(fm.horizontalAdvance(ln) for ln in lines) + 36, 260)
+        par = self.parentWidget()
+        if par is not None:
+            w = min(w, max(260, par.width() - self.x() - 4))
+        h = fm.lineSpacing() * len(lines) + 22 + 34
+        self.resize(int(w), int(h))
+
+    def commit(self):
+        self.committed.emit(self.ed.toPlainText())
+
+    def eventFilter(self, obj, e):
+        from PySide6.QtCore import QEvent
+        if obj is self.ed and e.type() == QEvent.KeyPress:
+            if e.key() in (Qt.Key_Return, Qt.Key_Enter) and e.modifiers() & Qt.ControlModifier:
+                self.commit()
+                return True
+            if e.key() == Qt.Key_Escape:
+                self.cancelled.emit()
+                return True
+        return super().eventFilter(obj, e)
+
+    def focus(self):
+        self.show()
+        self.raise_()
+        self.ed.setFocus()
+        self.ed.selectAll()
 
 
 class DropZone(QFrame):

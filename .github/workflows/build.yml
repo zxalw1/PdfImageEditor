@@ -19,7 +19,7 @@ jobs:
         run: >
           pyinstaller --noconfirm --clean --windowed --name PdfImageEditor
           --icon app\assets\app.ico --add-data "app\assets;app\assets" --version-file version_info.txt
-          --hidden-import win32timezone --collect-submodules pdf2docx
+          --hidden-import win32timezone --hidden-import fontTools.subset --collect-submodules pdf2docx
           --exclude-module PySide6.QtWebEngineCore --exclude-module PySide6.QtWebEngineWidgets
           --exclude-module PySide6.Qt3DCore --exclude-module PySide6.QtQuick
           --exclude-module PySide6.QtQml --exclude-module PySide6.QtMultimedia

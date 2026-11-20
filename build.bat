@@ -2,7 +2,7 @@
 chcp 65001 >nul
 cd /d "%~dp0"
 set APPNAME=PdfImageEditor
-set VER=1.1.1
+set VER=1.2.0
 
 if not exist .venv (
     echo [1/5] 가상환경 생성
@@ -26,6 +26,7 @@ pyinstaller --noconfirm --clean --windowed ^
   --add-data "app\assets;app\assets" ^
   --version-file version_info.txt ^
   --hidden-import win32timezone ^
+  --hidden-import fontTools.subset ^
   --collect-submodules pdf2docx ^
   --exclude-module PySide6.QtWebEngineCore ^
   --exclude-module PySide6.QtWebEngineWidgets ^

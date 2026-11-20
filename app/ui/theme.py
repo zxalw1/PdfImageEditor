@@ -106,13 +106,17 @@ QToolButton#Nav:hover {{ background:{c['hover']}; }}
 QToolButton#Nav:checked {{ background:{c['accent_soft']}; color:{c['accent']}; font-weight:600; }}
 
 QToolBar {{ background:{c['surface']}; border:none; border-bottom:1px solid {c['border']}; padding:4px 8px; spacing:2px; }}
-QToolBar::separator {{ width:1px; background:{c['border']}; margin:8px 6px; }}
-QToolButton {{ border:none; border-radius:6px; padding:4px 6px; background:transparent; }}
+QToolBar::separator {{ width:1px; background:{c['border']}; margin:8px 4px; }}
+QToolButton {{ border:none; border-radius:6px; padding:4px 4px; background:transparent; }}
 QToolButton:hover {{ background:{c['hover']}; }}
 QToolButton:pressed {{ background:{c['border']}; }}
 QToolButton:checked {{ background:{c['accent_soft']}; color:{c['accent']}; }}
 QToolButton:disabled {{ color:{c['text3']}; }}
 QToolButton::menu-indicator {{ image:none; width:0; }}
+QToolButton[popupMode="1"] {{ padding-right:16px; }}
+QToolButton::menu-button {{ border:none; background:transparent; width:14px; border-top-right-radius:6px; border-bottom-right-radius:6px; }}
+QToolButton::menu-button:hover {{ background:{c['border']}; }}
+QToolButton::menu-arrow {{ image:url({dn}); width:12px; height:12px; }}
 
 QPushButton {{ background:{c['surface']}; border:1px solid {c['border']}; border-radius:6px; padding:6px 14px; }}
 QPushButton:hover {{ background:{c['hover']}; }}
