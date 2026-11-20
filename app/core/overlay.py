@@ -148,6 +148,17 @@ class ObjectLayer:
         y0 = ay - h if "t" in handle else ay
         o.rect = (x0, y0, x0 + w, y0 + h)
 
+    def remap(self, old_doc, new_doc):
+        """문서를 다시 만든 경우(용량 줄이기 등) 페이지 순서 기준으로 xref 다시 연결"""
+        idx = {old_doc[i].xref: i for i in range(old_doc.page_count)}
+        keep = []
+        for o in self.items:
+            i = idx.get(o.page_xref)
+            if i is not None and i < new_doc.page_count:
+                o.page_xref = new_doc[i].xref
+                keep.append(o)
+        self.items = keep
+
     def drop_missing(self, doc):
         alive = {doc[i].xref for i in range(doc.page_count)}
         self.items = [o for o in self.items if o.page_xref in alive]

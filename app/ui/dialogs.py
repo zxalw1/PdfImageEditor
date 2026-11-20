@@ -456,6 +456,66 @@ class PageDecoDialog(QDialog):
         self.accept()
 
 
+class CompressDialog(QDialog):
+    """PDF 용량 줄이기 옵션"""
+
+    def __init__(self, current_size_text="", parent=None):
+        super().__init__(parent)
+        from app.core.compress import PRESETS
+        self.setWindowTitle("PDF 용량 줄이기")
+        self.presets = PRESETS
+        v = QVBoxLayout(self)
+        v.setSpacing(10)
+        v.addWidget(QLabel("사진·스캔 이미지의 해상도와 품질을 낮춰 용량을 줄입니다. 글자는 그대로 선명합니다.",
+                           objectName="Muted"))
+        if current_size_text:
+            v.addWidget(QLabel(f"현재 문서: {current_size_text}", objectName="Caption"))
+        self.radios = []
+        g = QButtonGroup(self)
+        for i, (name, dpi, q) in enumerate(PRESETS):
+            r = QRadioButton(name)
+            g.addButton(r)
+            v.addWidget(r)
+            self.radios.append(r)
+        self.r_custom = QRadioButton("직접 지정")
+        g.addButton(self.r_custom)
+        v.addWidget(self.r_custom)
+        self.radios[1].setChecked(True)
+        h = QHBoxLayout()
+        h.addSpacing(26)
+        h.addWidget(QLabel("해상도"))
+        self.sp_dpi = QSpinBox()
+        self.sp_dpi.setRange(50, 600)
+        self.sp_dpi.setValue(150)
+        self.sp_dpi.setSuffix(" DPI")
+        h.addWidget(self.sp_dpi)
+        h.addWidget(QLabel("품질"))
+        self.sp_q = QSpinBox()
+        self.sp_q.setRange(20, 95)
+        self.sp_q.setValue(75)
+        h.addWidget(self.sp_q)
+        h.addStretch()
+        v.addLayout(h)
+        for w in (self.sp_dpi, self.sp_q):
+            w.valueChanged.connect(lambda *_: self.r_custom.setChecked(True))
+        self.cb_gray = QCheckBox("흑백으로 바꾸기 (컬러가 필요 없는 문서면 더 작아짐)")
+        v.addWidget(self.cb_gray)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.button(QDialogButtonBox.Ok).setText("줄이기")
+        bb.button(QDialogButtonBox.Ok).setObjectName("Primary")
+        bb.button(QDialogButtonBox.Cancel).setText("취소")
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        v.addWidget(bb)
+
+    def values(self):
+        """(dpi, quality, gray)"""
+        for r, (_n, dpi, q) in zip(self.radios, self.presets):
+            if r.isChecked():
+                return dpi, q, self.cb_gray.isChecked()
+        return self.sp_dpi.value(), self.sp_q.value(), self.cb_gray.isChecked()
+
+
 class PagePickerWindow(QDialog):
     """다른 PDF 의 페이지를 골라 끌어오기 (창을 띄워둔 채 본 창의 썸네일 목록으로 드래그)"""
     from PySide6.QtCore import Signal as _Signal

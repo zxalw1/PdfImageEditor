@@ -22,7 +22,7 @@ from app.ui.widgets import (
     paint_shape,
 )
 from app.ui.dialogs import (
-    SplitDialog, ReplaceDialog, SignatureDialog, PageDecoDialog, PagePickerWindow, ask_password,
+    SplitDialog, ReplaceDialog, SignatureDialog, PageDecoDialog, PagePickerWindow, CompressDialog, ask_password,
 )
 from app.ui.workers import run_task
 
@@ -189,11 +189,13 @@ class PdfTab(QWidget):
         self.a_saveas = self._act("save-as", "다른 이름 저장", self.save_as, "Ctrl+Shift+S", toolbar=False)
         self.a_deco = self._act("page-deco", "페이지 번호·머리글·워터마크…", self.page_deco, toolbar=False)
         self.a_pick = self._act("merge", "다른 PDF에서 페이지 가져오기…", self.open_page_picker, toolbar=False)
+        self.a_compress = self._act("compress", "용량 줄이기…", self.compress_pdf, toolbar=False)
         self.a_blank = self._act("page-add", "빈 페이지 넣기", self.insert_blank, toolbar=False)
         self.a_ext = self._act("extract", "선택 페이지 추출", self.extract, toolbar=False)
         self.a_split = self._act("split", "PDF 분할", self.split, toolbar=False)
         menu = QMenu(self)
         menu.addAction(self.a_saveas)
+        menu.addAction(self.a_compress)
         menu.addSeparator()
         menu.addAction(self.a_repl)
         menu.addAction(self.a_deco)
@@ -276,7 +278,8 @@ class PdfTab(QWidget):
         self.setAcceptDrops(True)
         self.edit_actions = [self.a_save, self.a_saveas, self.a_rl, self.a_rr, self.a_del, self.a_blank,
                              self.a_up, self.a_dn, self.a_ext, self.a_split, self.a_text, self.a_white,
-                             self.a_repl, self.a_zin, self.a_zout, self.a_edit, self.a_deco, self.a_pick]
+                             self.a_repl, self.a_zin, self.a_zout, self.a_edit, self.a_deco, self.a_pick,
+                             self.a_compress]
         self.edit_widgets = [self.font_box, self.cb_zoom, self.btn_edit, self.btn_insert, self.btn_annot]
 
     def _paint_color_btn(self):
@@ -990,6 +993,34 @@ class PdfTab(QWidget):
         at = pdf_ops.insert_pages_from(self.doc, src, pages, row)
         self.refresh(list(range(at, at + len(pages))))
         self.win.toast(f"다른 PDF에서 {len(pages)}페이지를 {at + 1}번째 위치에 넣음")
+
+    def compress_pdf(self):
+        from app.core import compress as cp
+        size_txt = human(len(self.doc.tobytes())) + " (저장 전 기준)" if self.path is None else \
+            human(os.path.getsize(self.path)) + " (파일 크기)" if os.path.exists(self.path) else ""
+        dlg = CompressDialog(size_txt, self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        dpi, q, gray = dlg.values()
+        doc = self.doc
+        try:
+            res = run_task(self, "용량 줄이는 중...", 2, lambda t: cp.compress(doc, dpi, q, gray, t), busy_cursor=True)
+        except Exception as ex:
+            QMessageBox.warning(self, APP_NAME, f"용량 줄이기 실패\n{ex}")
+            return
+        if res.after >= res.before:
+            QMessageBox.information(self, APP_NAME, f"더 줄일 이미지가 없습니다.\n현재 {human(res.before)}")
+            return
+        msg = (f"{human(res.before)} → {human(res.after)}  ({res.saved_pct:.0f}% 감소)\n\n"
+               "이대로 적용할까요? (저장해야 파일에 반영, Ctrl+Z로 되돌리기 가능)")
+        if QMessageBox.question(self, "PDF 용량 줄이기", msg) != QMessageBox.Yes:
+            return
+        self.snapshot()
+        new = pdf_ops.doc_from_bytes(res.data)
+        self.layer.remap(self.doc, new)
+        self.doc = new
+        self.refresh(self.sel_rows())
+        self.win.toast(f"용량 줄이기 적용 · {human(res.before)} → {human(res.after)}")
 
     def page_deco(self):
         from app.core import page_deco as pdc
