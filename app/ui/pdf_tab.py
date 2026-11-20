@@ -2,12 +2,12 @@
 """PDF 편집 탭"""
 import os
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QPixmap, QIcon, QColor, QAction, QKeySequence
+from PySide6.QtCore import Qt, QSize
+from PySide6.QtGui import QPixmap, QColor, QAction, QKeySequence, QPainter, QIcon
 from PySide6.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QToolBar, QLabel, QSpinBox, QPushButton, QComboBox,
-    QSplitter, QScrollArea, QListWidgetItem, QMessageBox, QFileDialog, QInputDialog,
-    QColorDialog, QDialog,
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QToolBar, QToolButton, QLabel, QSpinBox,
+    QComboBox, QScrollArea, QListWidgetItem, QMessageBox, QFileDialog, QInputDialog, QColorDialog,
+    QDialog, QMenu, QStackedWidget, QSizePolicy,
 )
 
 from app import APP_NAME
@@ -15,17 +15,21 @@ from app.core import pdf_ops
 from app.core.utils import (
     fitz, IMG_EXT, PDF_EXT, PDF_FILTER, collect_files, human, korean_font, with_ext,
 )
-from app.ui.widgets import PageList, PageView, pix_to_qimage
+from app.ui import theme
+from app.ui.theme import bind_icon
+from app.ui.widgets import PageList, PageView, DropZone, pix_to_qimage, plain_icon, framed, icon_button
 from app.ui.dialogs import SplitDialog, ReplaceDialog, ask_password
 from app.ui.workers import run_task
 
 UNDO_LIMIT = 15
-EMPTY_TEXT = "PDF 파일을 열거나 여기로 끌어다 놓으세요"
+FIT = "폭 맞춤"
+ZOOMS = [FIT, "50%", "75%", "100%", "125%", "150%", "200%"]
 
 
 class PdfTab(QWidget):
     def __init__(self, win):
         super().__init__()
+        self.setObjectName("Page")
         self.win = win
         self.doc = None
         self.path = None
@@ -38,91 +42,172 @@ class PdfTab(QWidget):
         self._update_state()
 
     # ── UI ──
+    def _act(self, icon, text, slot, sc=None, checkable=False, tip=None, toolbar=True):
+        a = QAction(text, self)
+        bind_icon(a, icon, 'text', 20)
+        a.setCheckable(checkable)
+        if sc:
+            a.setShortcut(QKeySequence(sc))
+        a.setToolTip(f"{tip or text}" + (f"  ({sc})" if sc else ""))
+        a.triggered.connect(slot)
+        if toolbar:
+            self.tb.addAction(a)
+        else:
+            self.addAction(a)   # 메뉴에만 있는 동작도 단축키가 먹도록
+        return a
+
     def _build(self):
         v = QVBoxLayout(self)
-        v.setContentsMargins(4, 4, 4, 4)
-        tb = QToolBar()
-        tb.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(0)
+        self.tb = tb = QToolBar()
+        tb.setIconSize(QSize(20, 20))
+        tb.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        tb.setMovable(False)
         v.addWidget(tb)
 
-        def act(text, slot, sc=None, checkable=False):
-            a = QAction(text, self)
-            a.setCheckable(checkable)
-            if sc:
-                a.setShortcut(QKeySequence(sc))
-            a.triggered.connect(slot)
-            tb.addAction(a)
-            return a
-
-        act("열기", self.open_pdf, "Ctrl+O")
-        act("PDF/이미지 추가(병합)", lambda: self.merge_files())
-        self.a_save = act("저장", self.save, "Ctrl+S")
-        self.a_saveas = act("다른 이름 저장", self.save_as, "Ctrl+Shift+S")
+        # 파일
+        self.a_open = self._act("open", "열기", self.open_pdf, "Ctrl+O", tip="PDF 열기")
+        self.a_merge = self._act("merge", "추가", lambda: self.merge_files(), tip="PDF/이미지 추가(병합)")
+        self.a_save = self._act("save", "저장", self.save, "Ctrl+S")
         tb.addSeparator()
-        self.a_undo = act("실행취소", self.undo, "Ctrl+Z")
+        self.a_undo = self._act("undo", "실행취소", self.undo, "Ctrl+Z")
         tb.addSeparator()
-        self.a_rl = act("⟲ 좌회전", lambda: self.rotate(-90), "Ctrl+L")
-        self.a_rr = act("⟳ 우회전", lambda: self.rotate(90), "Ctrl+R")
-        self.a_del = act("페이지 삭제", self.delete_pages, "Delete")
-        self.a_blank = act("빈 페이지", self.insert_blank)
-        self.a_up = act("▲ 위로", lambda: self.move(-1))
-        self.a_dn = act("▼ 아래로", lambda: self.move(1))
+        # 페이지
+        self.a_rl = self._act("rotate-left", "왼쪽", lambda: self.rotate(-90), "Ctrl+L", tip="왼쪽으로 회전")
+        self.a_rr = self._act("rotate-right", "오른쪽", lambda: self.rotate(90), "Ctrl+R", tip="오른쪽으로 회전")
+        self.a_del = self._act("trash", "삭제", self.delete_pages, "Delete", tip="페이지 삭제")
+        self.a_up = self._act("arrow-up", "위로", lambda: self.move(-1), tip="페이지 위로")
+        self.a_dn = self._act("arrow-down", "아래로", lambda: self.move(1), tip="페이지 아래로")
         tb.addSeparator()
-        self.a_ext = act("선택 페이지 추출", self.extract)
-        self.a_split = act("분할", self.split)
-        tb.addSeparator()
-        self.a_text = act("텍스트 추가", lambda c: self.set_mode('text' if c else None), checkable=True)
-        self.a_white = act("영역 지우기", lambda c: self.set_mode('white' if c else None), checkable=True)
-        self.a_repl = act("찾아 바꾸기", self.replace_text, "Ctrl+H")
-        tb.addSeparator()
-        tb.addWidget(QLabel(" 글자 "))
+        # 편집
+        self.a_text = self._act("text-add", "텍스트", lambda c: self.set_mode('text' if c else None),
+                                checkable=True, tip="텍스트 추가 (페이지를 클릭)")
+        self.a_white = self._act("eraser", "지우기", lambda c: self.set_mode('white' if c else None),
+                                 checkable=True, tip="영역 지우기 (드래그)")
+        self.a_repl = self._act("replace", "바꾸기", self.replace_text, "Ctrl+H", tip="텍스트 찾아 바꾸기")
+        # 글자 크기·색
+        self.font_box = QWidget()
+        fh = QHBoxLayout(self.font_box)
+        fh.setContentsMargins(6, 0, 4, 0)
+        fh.setSpacing(4)
         self.sp_font = QSpinBox()
         self.sp_font.setRange(4, 200)
         self.sp_font.setValue(12)
-        tb.addWidget(self.sp_font)
-        self.btn_color = QPushButton("■")
-        self.btn_color.setFixedWidth(30)
-        self.btn_color.setStyleSheet("color:#000;font-size:16px;")
+        self.sp_font.setSuffix(" pt")
+        self.sp_font.setToolTip("글자 크기")
+        self.sp_font.setFixedWidth(74)
+        fh.addWidget(self.sp_font)
+        self.btn_color = QToolButton()
+        self.btn_color.setToolTip("글자 색")
+        self.btn_color.setIconSize(QSize(20, 20))
         self.btn_color.clicked.connect(self.pick_color)
-        tb.addWidget(self.btn_color)
-        tb.addWidget(QLabel(" 배율 "))
+        fh.addWidget(self.btn_color)
+        self._paint_color_btn()
+        tb.addWidget(self.font_box)
+        tb.addSeparator()
+        # 더보기
+        self.a_saveas = self._act("save-as", "다른 이름 저장", self.save_as, "Ctrl+Shift+S", toolbar=False)
+        self.a_blank = self._act("page-add", "빈 페이지 넣기", self.insert_blank, toolbar=False)
+        self.a_ext = self._act("extract", "선택 페이지 추출", self.extract, toolbar=False)
+        self.a_split = self._act("split", "PDF 분할", self.split, toolbar=False)
+        menu = QMenu(self)
+        menu.addAction(self.a_saveas)
+        menu.addSeparator()
+        menu.addAction(self.a_blank)
+        menu.addAction(self.a_ext)
+        menu.addAction(self.a_split)
+        self.btn_more = QToolButton()
+        self.btn_more.setText("더보기")
+        bind_icon(self.btn_more, "more", 'text', 20)
+        self.btn_more.setIconSize(QSize(20, 20))
+        self.btn_more.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        self.btn_more.setPopupMode(QToolButton.InstantPopup)
+        self.btn_more.setMenu(menu)
+        tb.addWidget(self.btn_more)
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        tb.addWidget(spacer)
+        # 보기
+        self.a_zout = self._act("zoom-out", "", lambda: self.step_zoom(-1), "Ctrl+-", tip="축소")
         self.cb_zoom = QComboBox()
-        self.cb_zoom.addItems(["폭 맞춤", "50%", "75%", "100%", "125%", "150%", "200%"])
-        self.cb_zoom.setCurrentText("폭 맞춤")
+        self.cb_zoom.addItems(ZOOMS)
+        self.cb_zoom.setCurrentText(FIT)
+        self.cb_zoom.setFixedWidth(96)
         self.cb_zoom.currentTextChanged.connect(lambda _: self.render_preview())
         tb.addWidget(self.cb_zoom)
+        self.a_zin = self._act("zoom-in", "", lambda: self.step_zoom(1), "Ctrl+=", tip="확대")
 
-        sp = QSplitter()
+        # 본문: 빈 화면(드롭존) / 편집 화면
+        self.body = QStackedWidget()
+        new_btn = icon_button("이미지·PDF로 새로 만들기", "page-add", lambda: self.merge_files(), kind=None)
+        open_btn = icon_button("PDF 열기", "open", self.open_pdf, kind="Primary")
+        self.drop = DropZone(PDF_EXT | IMG_EXT, "파일을 끌어다 놓거나 클릭해서 열기",
+                             "PDF 또는 이미지(JPG·PNG·HEIC) · 여러 개를 놓으면 하나로 합칩니다",
+                             [open_btn, new_btn])
+        self.drop.clicked.connect(self.open_pdf)
+        self.drop.filesDropped.connect(self.open_files)
+        dw = QWidget(objectName="Page")
+        dl = QVBoxLayout(dw)
+        dl.setContentsMargins(32, 28, 32, 28)
+        dl.addWidget(self.drop)
+        self.body.addWidget(dw)
+
+        ed = QWidget(objectName="Page")
+        eh = QHBoxLayout(ed)
+        eh.setContentsMargins(12, 12, 12, 12)
+        eh.setSpacing(12)
         self.pages = PageList()
-        self.pages.setMinimumWidth(190)
+        self.pages.setFixedWidth(184)
         self.pages.currentRowChanged.connect(lambda _: self.render_preview())
         self.pages.reordered.connect(self.on_reordered)
-        sp.addWidget(self.pages)
-
-        self.scroll = QScrollArea()
+        eh.addWidget(self.pages)
+        self.scroll = QScrollArea(objectName="Viewer")
         self.scroll.setAlignment(Qt.AlignCenter)
-        self.scroll.setStyleSheet("QScrollArea{background:#6b6b6b;}")
         self.view = PageView()
         self.view.clicked.connect(self.on_text_click)
         self.view.dragged.connect(self.on_white_drag)
         self.scroll.setWidget(self.view)
         self.scroll.setWidgetResizable(False)
-        sp.addWidget(self.scroll)
-        sp.setStretchFactor(1, 1)
-        sp.setSizes([210, 900])
-        v.addWidget(sp)
+        eh.addWidget(self.scroll, 1)
+        self.body.addWidget(ed)
+        v.addWidget(self.body, 1)
 
         self.setAcceptDrops(True)
         self.edit_actions = [self.a_save, self.a_saveas, self.a_rl, self.a_rr, self.a_del, self.a_blank,
                              self.a_up, self.a_dn, self.a_ext, self.a_split, self.a_text, self.a_white,
-                             self.a_repl]
+                             self.a_repl, self.a_zin, self.a_zout]
+        self.edit_widgets = [self.font_box, self.cb_zoom]
+
+    def _paint_color_btn(self):
+        """물방울(테마 글자색) + 아래 막대(선택한 글자 색). 검정도 다크모드에서 보이도록 막대에 테두리"""
+        col = QColor(*[int(x * 255) for x in self.color])
+        pm = QPixmap(48, 48)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.drawPixmap(8, 0, theme.svg_pixmap("color", theme.C['text'], 32, 1.0))
+        p.setPen(QColor(theme.C['text3']))
+        p.setBrush(col)
+        p.drawRoundedRect(6, 38, 36, 8, 3, 3)
+        p.end()
+        pm.setDevicePixelRatio(2.0)
+        self.btn_color.setIcon(QIcon(pm))
+        self.btn_color.setToolTip(f"글자 색 ({col.name()})")
+
+    def on_theme_changed(self):
+        self._paint_color_btn()
+        if self.doc is not None:   # 썸네일 테두리 색 갱신
+            self.refresh(self.sel_rows())
 
     def dragEnterEvent(self, e):
         if e.mimeData().hasUrls():
             e.acceptProposedAction()
 
     def dropEvent(self, e):
-        files = collect_files([u.toLocalFile() for u in e.mimeData().urls()], PDF_EXT | IMG_EXT)
+        self.open_files(collect_files([u.toLocalFile() for u in e.mimeData().urls()], PDF_EXT | IMG_EXT))
+
+    def open_files(self, files):
         if not files:
             return
         if self.doc is None and os.path.splitext(files[0])[1].lower() == '.pdf':
@@ -133,20 +218,29 @@ class PdfTab(QWidget):
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
-        if self.cb_zoom.currentText() == "폭 맞춤":
+        if self.cb_zoom.currentText() == FIT:
             self.render_preview()
 
     # ── 상태 ──
+    def status_text(self):
+        if self.doc is None:
+            return "열린 파일 없음"
+        name = os.path.basename(self.path) if self.path else "새 문서"
+        cur = max(self.pages.currentRow(), 0) + 1
+        return (f"{name}{' *' if self.modified else ''}    ·    페이지 {cur} / {self.doc.page_count}"
+                f"    ·    배율 {round(self.zoom * 100)}%")
+
     def _update_state(self):
         has = self.doc is not None
         for a in self.edit_actions:
             a.setEnabled(has)
+        for w in self.edit_widgets:
+            w.setEnabled(has)
+        self.btn_more.setEnabled(has)
         self.a_undo.setEnabled(bool(self.undo_stack))
-        name = os.path.basename(self.path) if self.path else ("새 문서" if has else "")
-        info = f"{name}{' *' if self.modified else ''}"
-        if has:
-            info += f"  |  {self.doc.page_count}페이지"
-        self.win.set_status(info)
+        self.body.setCurrentIndex(1 if has else 0)
+        if self.win.stack.currentWidget() in (None, self):
+            self.win.set_doc_info(self.status_text())
 
     def snapshot(self):
         self.undo_stack.append(self.doc.tobytes())
@@ -209,6 +303,10 @@ class PdfTab(QWidget):
         start = self.doc.page_count
         for name, ex in pdf_ops.merge_into(self.doc, files, ask_password(self)):
             QMessageBox.warning(self, APP_NAME, f"{name} 추가 실패\n{ex}")
+        if self.doc.page_count == 0:
+            self.doc = None
+            self.refresh()
+            return
         self.modified = True
         self.refresh([min(start, self.doc.page_count - 1)])
 
@@ -240,7 +338,7 @@ class PdfTab(QWidget):
             return False
         self.modified = False
         self._update_state()
-        self.win.statusBar().showMessage(f"저장 완료: {path} ({human(size)})", 5000)
+        self.win.toast(f"저장 완료 · {os.path.basename(path)} ({human(size)})")
         return True
 
     # ── 화면 ──
@@ -250,7 +348,7 @@ class PdfTab(QWidget):
         if self.doc is not None:
             for i, page in enumerate(self.doc):
                 pix = page.get_pixmap(matrix=fitz.Matrix(0.2, 0.2), alpha=False)
-                it = QListWidgetItem(QIcon(QPixmap.fromImage(pix_to_qimage(pix))), f"{i + 1}")
+                it = QListWidgetItem(plain_icon(framed(QPixmap.fromImage(pix_to_qimage(pix)))), f"{i + 1}")
                 it.setData(Qt.UserRole, i)
                 self.pages.addItem(it)
                 if i % 20 == 0:
@@ -270,18 +368,28 @@ class PdfTab(QWidget):
             return None
         return self.doc[r]
 
+    def step_zoom(self, d):
+        i = self.cb_zoom.currentIndex()
+        if self.cb_zoom.currentText() == FIT:
+            # 현재 배율에서 가장 가까운 다음 단계로
+            pct = [int(z.rstrip('%')) for z in ZOOMS[1:]]
+            cur = self.zoom * 100
+            nxt = [k for k, p in enumerate(pct) if (p > cur + 1 if d > 0 else p < cur - 1)]
+            i = (nxt[0] if d > 0 else nxt[-1]) + 1 if nxt else (len(ZOOMS) - 1 if d > 0 else 1)
+        else:
+            i = min(max(1, i + d), len(ZOOMS) - 1)
+        self.cb_zoom.setCurrentIndex(i)
+
     def render_preview(self):
         page = self.current_page()
         if page is None:
             self.view.clear()
-            self.view.setText(EMPTY_TEXT)
-            self.view.setStyleSheet("color:#eee;font-size:14px;")
-            self.view.resize(500, 200)
+            if self.doc is None:
+                self._update_status_only()
             return
-        self.view.setStyleSheet("")
         z = self.cb_zoom.currentText()
-        if z == "폭 맞춤":
-            w = max(200, self.scroll.viewport().width() - 30)
+        if z == FIT:
+            w = max(200, self.scroll.viewport().width() - 40)
             self.zoom = w / page.rect.width
         else:
             self.zoom = int(z.rstrip('%')) / 100
@@ -289,6 +397,11 @@ class PdfTab(QWidget):
         pm = QPixmap.fromImage(pix_to_qimage(pix))
         self.view.setPixmap(pm)
         self.view.resize(pm.size())
+        self._update_status_only()
+
+    def _update_status_only(self):
+        if self.win.stack.currentWidget() in (None, self):
+            self.win.set_doc_info(self.status_text())
 
     def to_pdf_point(self, page, qp, dy=0.0):
         return pdf_ops.view_to_pdf_point(page, qp.x(), qp.y(), self.zoom, dy)
@@ -349,7 +462,7 @@ class PdfTab(QWidget):
         if not p:
             return
         pdf_ops.extract_pages(self.doc, rows, p)
-        self.win.statusBar().showMessage(f"{len(rows)}페이지 추출 완료: {p}", 5000)
+        self.win.toast(f"{len(rows)}페이지 추출 완료 · {os.path.basename(p)}")
 
     def split(self):
         dlg = SplitDialog(self.doc.page_count, self)
@@ -385,7 +498,7 @@ class PdfTab(QWidget):
         c = QColorDialog.getColor(QColor(*[int(x * 255) for x in self.color]), self, "글자 색")
         if c.isValid():
             self.color = (c.redF(), c.greenF(), c.blueF())
-            self.btn_color.setStyleSheet(f"color:{c.name()};font-size:16px;")
+            self._paint_color_btn()
 
     def on_text_click(self, qp):
         page = self.current_page()

@@ -17,9 +17,12 @@
 - PC에 MS Office 설치됨, AhnLab V3 설치됨 (PyInstaller exe 오탐 가능성 주의)
 - 스택: PySide6 / PyMuPDF(`import pymupdf as fitz`) / Pillow / pillow-heif / openpyxl / pdf2docx / pywin32 / PyInstaller / Inno Setup 6
 
-## 현재 상태 (v1.0.1)
+## 현재 상태 (v1.1.0)
 진입점 `main.py` + `app/` 패키지 (작업목록 1번 구조, v1.0.0 단일 파일은 git 태그 `v1.0.0`).
-`app/core`는 Qt 없음(pytest 대상), 무거운 작업은 `app/ui/workers.py`의 `run_task()`(QThread+진행률/취소). 탭 3개:
+`app/core`는 Qt 없음(pytest 대상), 무거운 작업은 `app/ui/workers.py`의 `run_task()`(QThread+진행률/취소).
+UI(작업목록 2번 완료): `app/ui/theme.py` 색 토큰(LIGHT/DARK)·QSS·`bind_icon()`(테마 전환 시 자동 재착색), 다크모드 설정은 QSettings 저장.
+아이콘은 `tools/make_icons.py` → `app/assets/icons/*.svg`, 앱 아이콘은 `tools/make_app_icon.py` → `app/assets/app.ico`.
+좌측 내비게이션 3개 화면:
 1. **PDF 편집**: 열기·병합(PDF/이미지)·저장, 회전, 페이지 삭제·순서변경(드래그/▲▼)·빈 페이지, 선택 추출, 분할(페이지별/N페이지/범위), 텍스트 추가(클릭), 영역 지우기(드래그 → redact), 찾아 바꾸기, 실행취소 15단계, 암호 PDF
 2. **사진 편집**: 일괄 형식변환(JPG/PNG/WEBP/BMP/TIFF/GIF/ICO), 크기(%/가로/세로/지정), 품질, 목표 용량(KB) 이하 압축, 회전·반전, EXIF 방향 보정, HEIC
 3. **변환** (하위 탭 4개): PDF→이미지 / 이미지→PDF / Excel·Word·PPT·한글→PDF (MS Office·한글 COM 우선, 없으면 LibreOffice) / PDF→Word·Excel(표 추출)·텍스트
