@@ -2,7 +2,7 @@
 chcp 65001 >nul
 cd /d "%~dp0"
 set APPNAME=PdfImageEditor
-set VER=1.9.1
+set VER=1.9.2
 
 if not exist .venv (
     echo [1/6] 가상환경 생성
