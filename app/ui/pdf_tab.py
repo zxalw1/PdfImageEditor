@@ -21,7 +21,7 @@ from app.ui.widgets import (
     PageList, PageView, DropZone, InlineTextEditor, pix_to_qimage, plain_icon, framed, icon_button,
     paint_shape,
 )
-from app.ui.dialogs import SplitDialog, ReplaceDialog, SignatureDialog, ask_password
+from app.ui.dialogs import SplitDialog, ReplaceDialog, SignatureDialog, PageDecoDialog, ask_password
 from app.ui.workers import run_task
 
 UNDO_LIMIT = 15
@@ -185,6 +185,7 @@ class PdfTab(QWidget):
         tb.addSeparator()
         # 더보기
         self.a_saveas = self._act("save-as", "다른 이름 저장", self.save_as, "Ctrl+Shift+S", toolbar=False)
+        self.a_deco = self._act("page-deco", "페이지 번호·머리글·워터마크…", self.page_deco, toolbar=False)
         self.a_blank = self._act("page-add", "빈 페이지 넣기", self.insert_blank, toolbar=False)
         self.a_ext = self._act("extract", "선택 페이지 추출", self.extract, toolbar=False)
         self.a_split = self._act("split", "PDF 분할", self.split, toolbar=False)
@@ -192,6 +193,7 @@ class PdfTab(QWidget):
         menu.addAction(self.a_saveas)
         menu.addSeparator()
         menu.addAction(self.a_repl)
+        menu.addAction(self.a_deco)
         menu.addAction(self.a_blank)
         menu.addAction(self.a_ext)
         menu.addAction(self.a_split)
@@ -266,7 +268,7 @@ class PdfTab(QWidget):
         self.setAcceptDrops(True)
         self.edit_actions = [self.a_save, self.a_saveas, self.a_rl, self.a_rr, self.a_del, self.a_blank,
                              self.a_up, self.a_dn, self.a_ext, self.a_split, self.a_text, self.a_white,
-                             self.a_repl, self.a_zin, self.a_zout, self.a_edit]
+                             self.a_repl, self.a_zin, self.a_zout, self.a_edit, self.a_deco]
         self.edit_widgets = [self.font_box, self.cb_zoom, self.btn_edit, self.btn_insert, self.btn_annot]
 
     def _paint_color_btn(self):
@@ -642,6 +644,7 @@ class PdfTab(QWidget):
         bind_icon(a, "insert-image", 'text', 18)
         a = m.addAction("도장·서명 이미지 넣기 (흰 배경 투명하게)…", lambda: self.insert_image_file(True))
         bind_icon(a, "stamp", 'text', 18)
+        m.addAction(self.a_deco)
         m.addSeparator()
         a = m.addAction("서명 그리기…", self.draw_signature)
         bind_icon(a, "signature", 'text', 18)
@@ -925,6 +928,25 @@ class PdfTab(QWidget):
         self.snapshot()
         pdf_ops.reorder(self.doc, order)
         self.refresh(sel)
+
+    def page_deco(self):
+        from app.core import page_deco as pdc
+        dlg = PageDecoDialog(self.doc, max(self.pages.currentRow(), 0), pdc.filename_of(self.path), self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        o = dlg.options()
+        n = len(pdc.target_pages(o, self.doc.page_count))
+        self.snapshot()
+        try:
+            run_task(self, "페이지 꾸미는 중...", n, lambda t: pdc.decorate(self.doc, o, t))
+        except Exception as ex:
+            self._restore(self.undo_stack.pop())
+            QMessageBox.warning(self, APP_NAME, f"적용 실패\n{ex}")
+            return
+        self.refresh(self.sel_rows())
+        what = [w for w, on in (("페이지 번호", o.numbers.enabled), ("머리글·바닥글", o.hf.enabled),
+                                ("워터마크", o.wm.enabled)) if on]
+        self.win.toast(f"{n}페이지에 {'·'.join(what)} 적용 (Ctrl+Z로 되돌리기)")
 
     def _output_doc(self):
         """추출·분할용: 삽입 객체가 있으면 합쳐진 사본 (편집 중 레이어는 그대로)"""

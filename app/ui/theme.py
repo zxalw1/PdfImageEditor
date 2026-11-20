@@ -58,6 +58,7 @@ _QSS_SVG = {
     "check": ('<path d="M5 12.5l4.5 4.5L19 7.5"/>', 3),
     "chev-down": ('<path d="M7 10l5 5 5-5"/>', 2.2),
     "chev-up": ('<path d="M7 14l5-5 5 5"/>', 2.2),
+    "dot": ('<circle cx="12" cy="12" r="5.5" fill="currentFill"/>', 0),
 }
 
 
@@ -67,6 +68,7 @@ def _qss_svg(name, color):
     p = os.path.join(d, f"{name}_{color.lstrip('#')}.svg")
     if not os.path.exists(p):
         body, sw = _QSS_SVG[name]
+        body = body.replace("currentFill", color)
         with open(p, "w", encoding="utf-8") as f:
             f.write('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
                     f'stroke="{color}" stroke-width="{sw}" stroke-linecap="round" stroke-linejoin="round">'
@@ -148,7 +150,7 @@ QCheckBox::indicator:hover {{ border-color:{c['accent']}; }}
 QCheckBox::indicator:checked {{ background:{c['accent']}; border-color:{c['accent']}; image:url({chk}); }}
 QCheckBox::indicator:disabled {{ background:{c['hover']}; border-color:{c['border']}; }}
 QRadioButton::indicator {{ width:16px; height:16px; border:1.5px solid {c['border_strong']}; border-radius:9px; background:{c['surface']}; }}
-QRadioButton::indicator:checked {{ border:5px solid {c['accent']}; background:{c['on_accent']}; }}
+QRadioButton::indicator:checked {{ border:1.5px solid {c['accent']}; background:{c['surface']}; image:url({_qss_svg("dot", c['accent'])}); }}
 QSlider::groove:horizontal {{ height:4px; background:{c['border']}; border-radius:2px; }}
 QSlider::sub-page:horizontal {{ background:{c['accent']}; border-radius:2px; }}
 QSlider::handle:horizontal {{ width:16px; height:16px; margin:-6px 0; border-radius:8px; background:{c['surface']}; border:1.5px solid {c['accent']}; }}
@@ -159,6 +161,9 @@ QListWidget::item:hover {{ background:{c['hover']}; }}
 QListWidget::item:selected {{ background:{c['accent_soft']}; color:{c['text']}; }}
 
 QGroupBox {{ background:{c['surface']}; border:1px solid {c['border']}; border-radius:8px; margin-top:0; padding:36px 12px 12px 12px; font-weight:600; }}
+QGroupBox::indicator {{ width:16px; height:16px; border:1.5px solid {c['border_strong']}; border-radius:4px; background:{c['surface']}; }}
+QGroupBox::indicator:checked {{ background:{c['accent']}; border-color:{c['accent']}; image:url({chk}); }}
+QGroupBox[checkable="true"]:!checked {{ color:{c['text3']}; }}
 QGroupBox::title {{ subcontrol-origin:padding; subcontrol-position:top left; left:14px; top:12px; padding:0; color:{c['text']}; font-size:10.5pt; background:transparent; }}
 
 QStatusBar {{ background:{c['surface']}; border-top:1px solid {c['border']}; color:{c['text2']}; min-height:26px; }}
