@@ -1,7 +1,7 @@
 ﻿; PDF·이미지 통합 편집기 설치 스크립트 (Inno Setup 6)
 #define MyAppName "PDF·이미지 통합 편집기"
 #define MyAppExeName "PdfImageEditor.exe"
-#define MyAppVersion "1.9.0"
+#define MyAppVersion "1.9.1"
 #define MyAppPublisher "CNC International"
 
 [Setup]
@@ -49,8 +49,14 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{#MyAppName} 실행"; Flags: nowait postinstall skipifsilent
-; 자동 업데이트(/SILENT 설치) 후에는 프로그램을 바로 다시 실행
-Filename: "{app}\{#MyAppExeName}"; Flags: nowait; Check: WizardSilent
+; 자동 업데이트(앱이 /AUTOUPDATE=1 로 실행)일 때만 설치 후 프로그램을 다시 실행 (일괄 무인 설치 때는 실행 안 함)
+Filename: "{app}\{#MyAppExeName}"; Flags: nowait; Check: IsAutoUpdate
+
+[Code]
+function IsAutoUpdate: Boolean;
+begin
+  Result := ExpandConstant('{param:AUTOUPDATE|0}') = '1';
+end;
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"

@@ -183,7 +183,7 @@ def _silent_remove(p):
 
 
 # ── 설치 실행 ──
-INSTALL_ARGS = ["/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS"]
+INSTALL_ARGS = ["/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/AUTOUPDATE=1"]
 
 
 def launch_installer(path, verify_sha=None):
