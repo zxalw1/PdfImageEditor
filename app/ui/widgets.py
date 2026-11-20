@@ -259,6 +259,51 @@ class PageList(QListWidget):
         self.reordered.emit()
 
 
+def paint_shape(p, o, r, scale=1.0):
+    """주석 도형 그리기 (화면·썸네일 공용). o: {'kind','color'(0~1 tuple),'flip','width'}"""
+    from PySide6.QtGui import QPolygonF
+    import math
+    col = QColor.fromRgbF(*o['color'])
+    k = o['kind']
+    w = max(1.0, o.get('width', 2.0) * scale)
+    p.save()
+    p.setRenderHint(QPainter.Antialiasing)
+    if k == 'highlight':
+        c = QColor(col)
+        c.setAlphaF(0.4)
+        p.fillRect(r, c)
+    elif k == 'underline':
+        p.setPen(QPen(col, w, Qt.SolidLine, Qt.FlatCap))
+        p.drawLine(r.bottomLeft(), r.bottomRight())
+    elif k == 'rect':
+        p.setPen(QPen(col, w))
+        p.setBrush(Qt.NoBrush)
+        p.drawRect(r)
+    elif k == 'arrow':
+        fx, fy = o.get('flip', (False, False))
+        s = QPointF(r.right() if fx else r.left(), r.bottom() if fy else r.top())
+        e = QPointF(r.left() if fx else r.right(), r.top() if fy else r.bottom())
+        ang = math.atan2(e.y() - s.y(), e.x() - s.x())
+        hl = max(6.0, 5 * w)
+        base = QPointF(e.x() - hl * math.cos(ang), e.y() - hl * math.sin(ang))
+        p.setPen(QPen(col, w, Qt.SolidLine, Qt.RoundCap))
+        p.drawLine(s, base)
+        left = QPointF(e.x() - hl * math.cos(ang - 0.45), e.y() - hl * math.sin(ang - 0.45))
+        right = QPointF(e.x() - hl * math.cos(ang + 0.45), e.y() - hl * math.sin(ang + 0.45))
+        p.setPen(Qt.NoPen)
+        p.setBrush(col)
+        p.drawPolygon(QPolygonF([e, left, right]))
+    elif k == 'note':
+        p.setPen(QPen(col.darker(150), max(1.0, scale)))
+        p.setBrush(col)
+        p.drawRoundedRect(r, 2 * scale, 2 * scale)
+        p.setPen(QPen(col.darker(200), max(1.0, scale)))
+        for i in (0.35, 0.55, 0.75):
+            y = r.top() + r.height() * i
+            p.drawLine(QPointF(r.left() + r.width() * 0.2, y), QPointF(r.right() - r.width() * 0.2, y))
+    p.restore()
+
+
 class PageView(QLabel):
     """페이지 미리보기. 모드: None / 'text'(클릭 위치에 추가) / 'white'(드래그 지우기) / 'edit'(기존 글자 수정)"""
     clicked = Signal(QPoint)
@@ -270,6 +315,8 @@ class PageView(QLabel):
     objectChanged = Signal(int, QRectF)  # id, 새 사각형(화면 px)
     objectMenu = Signal(int, QPoint)    # 오른쪽 클릭 (id, 전역 좌표)
     placeRequested = Signal(QRectF)     # place 모드: 클릭(크기 0) 또는 드래그한 사각형
+    annotDrawn = Signal(QPointF, QPointF)  # annot 모드: 시작점, 끝점 (화면 px)
+    objectDoubleClicked = Signal(int)
     escapePressed = Signal()
     HANDLE = 9
 
@@ -288,15 +335,25 @@ class PageView(QLabel):
         self._drag = None               # ('move'|'tl'|'tr'|'bl'|'br', id, 시작점, 원래 rect)
         self._ghost = None              # 끌고 있는 동안의 사각형
         self.place_aspect = 1.0
+        self.annot_kind = 'highlight'
+        self.annot_color = (1.0, 0.9, 0.0)
 
     def set_mode(self, m):
         self.mode = m
         self._hover = None
         self._drag = self._ghost = None
-        self.setCursor(Qt.CrossCursor if m in ('text', 'white', 'place') else Qt.ArrowCursor)
-        if m == 'place':
+        self.setCursor(Qt.CrossCursor if m in ('text', 'white', 'place', 'annot') else Qt.ArrowCursor)
+        if m in ('place', 'annot'):
             self.setFocus()
         self.update()
+
+    def mouseDoubleClickEvent(self, e):
+        if self.mode is None and e.button() == Qt.LeftButton:
+            _k, oid = self._object_hit(e.position())
+            if oid is not None:
+                self.objectDoubleClicked.emit(oid)
+                return
+        super().mouseDoubleClickEvent(e)
 
     # ── 삽입 객체 ──
     def set_objects(self, objs, sel_id=None):
@@ -316,12 +373,13 @@ class PageView(QLabel):
     def _object_hit(self, pos):
         """(동작, id): 선택된 객체의 모서리 → 크기조절, 객체 내부 → 이동"""
         sel = self._obj(self.sel_id)
-        if sel:
+        if sel and sel.get('resizable', True):
             for k, hr in self._handles(sel['rect']).items():
                 if hr.adjusted(-3, -3, 3, 3).contains(pos):
                     return k, sel['id']
         for o in reversed(self.objects):
-            if o['rect'].contains(pos):
+            pad = 0 if o.get('pix') is not None else 5      # 얇은 선(밑줄·화살표)도 잡히게
+            if o['rect'].adjusted(-pad, -pad, pad, pad).contains(pos):
                 return 'move', o['id']
         return None, None
 
@@ -335,7 +393,7 @@ class PageView(QLabel):
         ay = r0.bottom() if 't' in kind else r0.top()
         w = max(8.0, abs(pos.x() - ax))
         h = max(8.0, abs(pos.y() - ay))
-        if not free:
+        if not free and o.get('aspect'):
             a = o['aspect']
             if w / h > a:
                 w = h * a
@@ -385,6 +443,10 @@ class PageView(QLabel):
             self.update()
             return
         kind, _oid = self._object_hit(pos)
+        o = self._obj(_oid)
+        tip = (o.get('text') or "") if o and o.get('kind') == 'note' else ""
+        if self.toolTip() != tip:
+            self.setToolTip(tip)
         cur = {None: Qt.ArrowCursor, 'move': Qt.SizeAllCursor, 'tl': Qt.SizeFDiagCursor,
                'br': Qt.SizeFDiagCursor, 'tr': Qt.SizeBDiagCursor, 'bl': Qt.SizeBDiagCursor}[kind]
         self.setCursor(cur)
@@ -461,6 +523,8 @@ class PageView(QLabel):
             if r.width() < 8 or r.height() < 8:
                 r = QRectF(QPointF(s), QPointF(s))          # 클릭 = 기본 크기로 그 자리에
             self.placeRequested.emit(r)
+        elif self.mode == 'annot':
+            self.annotDrawn.emit(QPointF(s), QPointF(c))
         elif self.mode == 'text':
             self.clicked.emit(s)
         elif self.mode == 'white':
@@ -475,26 +539,44 @@ class PageView(QLabel):
         acc = QColor(theme.C['accent'])
         for o in self.objects:
             r = o['rect']
+            def draw(rr):
+                if o.get('pix') is not None:
+                    p.drawPixmap(rr, o['pix'], QRectF(o['pix'].rect()))
+                else:
+                    paint_shape(p, o, rr, o.get('scale', 1.0))
             if self._ghost is not None and self._drag and self._drag[1] == o['id']:
                 p.setOpacity(0.35)                     # 원래 자리는 흐리게
-                p.drawPixmap(r, o['pix'], QRectF(o['pix'].rect()))
+                draw(r)
                 p.setOpacity(1.0)
                 r = self._ghost
-            p.drawPixmap(r, o['pix'], QRectF(o['pix'].rect()))
+            draw(r)
             if o['id'] == self.sel_id and self.mode is None:
                 p.setPen(QPen(acc, 1.5, Qt.DashLine))
                 p.setBrush(Qt.NoBrush)
-                p.drawRect(r)
-                p.setPen(QPen(acc, 1.5))
-                p.setBrush(QColor("#FFFFFF"))
-                for hr in self._handles(r).values():
-                    p.drawRect(hr)
+                p.drawRect(r.adjusted(-2, -2, 2, 2) if o.get('pix') is None else r)
+                if o.get('resizable', True):
+                    p.setPen(QPen(acc, 1.5))
+                    p.setBrush(QColor("#FFFFFF"))
+                    for hr in self._handles(r).values():
+                        p.drawRect(hr)
 
     def paintEvent(self, e):
         super().paintEvent(e)
         if self.objects:
             p = QPainter(self)
             self._paint_objects(p)
+            p.end()
+        if self.mode == 'annot' and self._start is not None:
+            p = QPainter(self)
+            s, c = QPointF(self._start), QPointF(self._cur)
+            r = QRectF(s, c).normalized()
+            k = self.annot_kind
+            if k == 'note':
+                r = QRectF(c.x(), c.y(), 20, 20)
+            elif k == 'underline':
+                r = QRectF(r.left(), c.y() - 1, r.width(), 1)
+            paint_shape(p, {'kind': k, 'color': self.annot_color, 'width': 2.0,
+                            'flip': (s.x() > c.x(), s.y() > c.y())}, r)
             p.end()
         if self.mode == 'place' and self._start is not None:
             p = QPainter(self)

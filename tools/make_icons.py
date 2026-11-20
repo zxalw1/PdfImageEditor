@@ -44,7 +44,13 @@ ICONS = {
                  '<path d="M3 20.5h18"/>',
     "stamp": '<path d="M9.5 4h5v3.5c0 1.5-1.5 2.2-1.5 4h-2c0-1.8-1.5-2.5-1.5-4z"/><path d="M5 14.5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v2H5z"/>'
              '<path d="M6 20h12"/>',
-    "replace":'<path d="M4 8h11.5M12.5 4.5L16 8l-3.5 3.5"/><path d="M20 16H8.5M11.5 12.5L8 16l3.5 3.5"/>',
+    "annotate": '<path d="M14.5 4l5.5 5.5-8.5 8.5H6v-5.5z"/><path d="M11.5 7l5.5 5.5"/><path d="M3.5 21h10"/>',
+    "underline": '<path d="M7 4v7a5 5 0 0 0 10 0V4"/><path d="M5 20.5h14"/>',
+    "shape-rect": '<rect x="4" y="6" width="16" height="12" rx="1.5"/>',
+    "shape-arrow": '<path d="M5 19L18.5 5.5"/><path d="M10 5h9v9"/>',
+    "note": '<path d="M5 4.5h14a1 1 0 0 1 1 1V15l-5 5H5a1 1 0 0 1-1-1V5.5a1 1 0 0 1 1-1z"/>'
+            '<path d="M15 20v-4a1 1 0 0 1 1-1h4"/><path d="M8 9h8M8 12.5h5"/>',
+    "replace": '<path d="M4 8h11.5M12.5 4.5L16 8l-3.5 3.5"/><path d="M20 16H8.5M11.5 12.5L8 16l3.5 3.5"/>',
     "search": MAG,
     "color": '<path d="M12 3.5c3 3.4 6 6.8 6 10.3a6 6 0 0 1-12 0c0-3.5 3-6.9 6-10.3z"/>',
     "more": '<circle cx="5.5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="18.5" cy="12" r="1"/>',

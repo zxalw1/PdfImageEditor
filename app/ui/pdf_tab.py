@@ -19,11 +19,15 @@ from app.ui import theme
 from app.ui.theme import bind_icon
 from app.ui.widgets import (
     PageList, PageView, DropZone, InlineTextEditor, pix_to_qimage, plain_icon, framed, icon_button,
+    paint_shape,
 )
 from app.ui.dialogs import SplitDialog, ReplaceDialog, SignatureDialog, ask_password
 from app.ui.workers import run_task
 
 UNDO_LIMIT = 15
+ANNOT_COLORS = [("노랑", (1.0, 0.9, 0.0)), ("초록", (0.3, 0.85, 0.35)), ("분홍", (1.0, 0.45, 0.7)),
+                ("하늘", (0.35, 0.75, 1.0)), ("빨강", (0.86, 0.15, 0.15)), ("파랑", (0.15, 0.35, 0.9)),
+                ("검정", (0.1, 0.1, 0.1))]
 FIT = "폭 맞춤"
 ZOOMS = [FIT, "50%", "75%", "100%", "125%", "150%", "200%"]
 
@@ -122,9 +126,43 @@ class PdfTab(QWidget):
         self.btn_insert.setPopupMode(QToolButton.InstantPopup)
         self.btn_insert.setMenu(self.ins_menu)
         tb.addWidget(self.btn_insert)
-        self.a_white =self._act("eraser", "지우기", lambda c: self.set_mode('white' if c else None),
+        # 주석 (형광펜·밑줄·사각형·화살표·메모)
+        self.annot_kind = None
+        self.annot_color = None         # None = 종류별 기본색
+        self.ann_menu = QMenu(self)
+        self.ann_actions = {}
+        for k, icon in [("highlight", "annotate"), ("underline", "underline"), ("rect", "shape-rect"),
+                        ("arrow", "shape-arrow"), ("note", "note")]:
+            a = self.ann_menu.addAction(ov.SHAPE_KINDS[k], lambda k=k: self.start_annot(k))
+            bind_icon(a, icon, 'text', 18)
+            a.setCheckable(True)
+            self.ann_actions[k] = a
+        self.ann_menu.addSeparator()
+        cm = self.ann_menu.addMenu("색")
+        self.color_actions = []
+        for name, col in [("종류별 기본색", None)] + ANNOT_COLORS:
+            a = cm.addAction(name, lambda col=col: self.set_annot_color(col))
+            a.setCheckable(True)
+            if col:
+                pm = QPixmap(14, 14)
+                pm.fill(QColor.fromRgbF(*col))
+                a.setIcon(QIcon(pm))
+            self.color_actions.append((a, col))
+        self.color_actions[0][0].setChecked(True)
+        self.btn_annot = QToolButton()
+        self.btn_annot.setText("주석")
+        self.btn_annot.setToolTip("형광펜·밑줄·사각형·화살표·메모 (드래그해서 그리기, Esc 끝내기)")
+        bind_icon(self.btn_annot, "annotate", 'text', 20)
+        self.btn_annot.setIconSize(QSize(20, 20))
+        self.btn_annot.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        self.btn_annot.setPopupMode(QToolButton.InstantPopup)
+        self.btn_annot.setCheckable(True)
+        self.btn_annot.setMenu(self.ann_menu)
+        tb.addWidget(self.btn_annot)
+        self.a_white = self._act("eraser", "지우기", lambda c: self.set_mode('white' if c else None),
                                  checkable=True, tip="영역 지우기 (드래그)")
-        self.a_repl = self._act("replace", "바꾸기", self.replace_text, "Ctrl+H", tip="텍스트 찾아 바꾸기")
+        self.a_repl = self._act("replace", "찾아 바꾸기", self.replace_text, "Ctrl+H", tip="텍스트 찾아 바꾸기",
+                                toolbar=False)
         # 글자 크기·색
         self.font_box = QWidget()
         fh = QHBoxLayout(self.font_box)
@@ -153,6 +191,7 @@ class PdfTab(QWidget):
         menu = QMenu(self)
         menu.addAction(self.a_saveas)
         menu.addSeparator()
+        menu.addAction(self.a_repl)
         menu.addAction(self.a_blank)
         menu.addAction(self.a_ext)
         menu.addAction(self.a_split)
@@ -212,6 +251,8 @@ class PdfTab(QWidget):
         self.view.objectChanged.connect(self.on_object_changed)
         self.view.objectMenu.connect(self.on_object_menu)
         self.view.placeRequested.connect(self.on_place)
+        self.view.annotDrawn.connect(self.on_annot_drawn)
+        self.view.objectDoubleClicked.connect(self.on_object_double_clicked)
         self.view.escapePressed.connect(self.on_escape)
         self.pages.itemPressed.connect(lambda _it: self._deselect_object())
         self._editor = None             # InlineTextEditor
@@ -226,7 +267,7 @@ class PdfTab(QWidget):
         self.edit_actions = [self.a_save, self.a_saveas, self.a_rl, self.a_rr, self.a_del, self.a_blank,
                              self.a_up, self.a_dn, self.a_ext, self.a_split, self.a_text, self.a_white,
                              self.a_repl, self.a_zin, self.a_zout, self.a_edit]
-        self.edit_widgets = [self.font_box, self.cb_zoom, self.btn_edit, self.btn_insert]
+        self.edit_widgets = [self.font_box, self.cb_zoom, self.btn_edit, self.btn_insert, self.btn_annot]
 
     def _paint_color_btn(self):
         """물방울(테마 글자색) + 아래 막대(선택한 글자 색). 검정도 다크모드에서 보이도록 막대에 테두리"""
@@ -279,7 +320,7 @@ class PdfTab(QWidget):
         s = (f"{name}{' *' if self.modified else ''}    ·    페이지 {cur} / {self.doc.page_count}"
              f"    ·    배율 {round(self.zoom * 100)}%")
         if len(self.layer):
-            s += f"    ·    삽입 객체 {len(self.layer)}개 (저장 시 PDF에 합쳐짐)"
+            s += f"    ·    삽입·주석 {len(self.layer)}개 (저장 시 PDF에 반영)"
         return s
 
     def _update_state(self):
@@ -415,7 +456,7 @@ class PdfTab(QWidget):
             self.refresh(self.sel_rows())
         self._update_state()
         self.win.toast(f"저장 완료 · {os.path.basename(path)} ({human(size)})"
-                       + (f" · 삽입 객체 {merged}개 합침" if merged else ""))
+                       + (f" · 삽입·주석 {merged}개 반영" if merged else ""))
         return True
 
     # ── 화면 ──
@@ -431,8 +472,13 @@ class PdfTab(QWidget):
                     p = QPainter(pm)
                     p.setRenderHint(QPainter.SmoothPixmapTransform)
                     for o in objs:
-                        r = o.frect() * 0.2
-                        p.drawPixmap(QRectF(r.x0, r.y0, r.width, r.height), self._pix(o), QRectF(self._pix(o).rect()))
+                        it = self._obj_item(o, 0.2)
+                        if o.is_image:
+                            p.drawPixmap(it['rect'], it['pix'], QRectF(it['pix'].rect()))
+                        else:
+                            if o.kind == "note":
+                                it['rect'] = QRectF(it['rect'].x(), it['rect'].y(), 5, 5)
+                            paint_shape(p, it, it['rect'], 0.2)
                     p.end()
                 it = QListWidgetItem(plain_icon(framed(pm)), f"{i + 1}")
                 it.setData(Qt.UserRole, i)
@@ -505,12 +551,89 @@ class PdfTab(QWidget):
             self.view.set_objects([])
             return
         z = self.zoom
-        items = [{'id': o.id, 'pix': self._pix(o), 'aspect': o.aspect,
-                  'rect': QRectF(o.rect[0] * z, o.rect[1] * z, (o.rect[2] - o.rect[0]) * z, (o.rect[3] - o.rect[1]) * z)}
-                 for o in self.layer.on_page(page.xref)]
+        items = [self._obj_item(o, z) for o in self.layer.on_page(page.xref)]
         if self.layer.get(self.sel_obj) is None or self.layer.get(self.sel_obj).page_xref != page.xref:
             self.sel_obj = None
         self.view.set_objects(items, self.sel_obj)
+
+    def _obj_item(self, o, z):
+        """PageView 에 넘길 표시용 정보 (z: 배율)"""
+        r = o.frect()
+        if o.kind == "note":                     # 메모 아이콘은 배율과 무관하게 일정 크기
+            rect = QRectF(r.x0 * z, r.y0 * z, 22, 22)
+        else:
+            rect = QRectF(r.x0 * z, r.y0 * z, r.width * z, r.height * z)
+        d = {'id': o.id, 'rect': rect, 'aspect': o.aspect, 'resizable': o.resizable, 'kind': o.kind,
+             'color': o.color, 'flip': o.flip, 'width': o.width, 'scale': z, 'text': o.text}
+        d['pix'] = self._pix(o) if o.is_image else None
+        return d
+
+    # ── 주석 ──
+    def start_annot(self, kind):
+        if self.doc is None:
+            return
+        self.set_mode('annot')
+        self.annot_kind = kind
+        for k, a in self.ann_actions.items():
+            a.setChecked(k == kind)
+        self.btn_annot.setChecked(True)
+        self.view.annot_kind = kind
+        self.view.annot_color = self.annot_color or ov.DEFAULT_COLORS[kind]
+        how = "클릭해서 메모 붙이기" if kind == "note" else "드래그해서 그리기"
+        self.win.toast(f"{ov.SHAPE_KINDS[kind]}: {how} · 계속 그릴 수 있습니다 (Esc 끝내기)", ms=8000)
+
+    def set_annot_color(self, col):
+        self.annot_color = col
+        for a, c in self.color_actions:
+            a.setChecked(c == col)
+        if self.annot_kind:
+            self.view.annot_color = col or ov.DEFAULT_COLORS[self.annot_kind]
+
+    def on_annot_drawn(self, s, e):
+        page = self.current_page()
+        kind = self.annot_kind
+        if page is None or kind is None:
+            return
+        z = self.zoom
+        s, e = (s.x() / z, s.y() / z), (e.x() / z, e.y() / z)
+        color = self.annot_color or ov.DEFAULT_COLORS[kind]
+        text = ""
+        if kind == "note":
+            text, ok = QInputDialog.getMultiLineText(self, "메모", "메모 내용:")
+            if not ok or not text.strip():
+                return
+            s = (e[0], e[1])
+        else:
+            if abs(e[0] - s[0]) < 4 and abs(e[1] - s[1]) < 4:
+                return                                   # 너무 작음(그냥 클릭)
+            if kind in ("highlight", "underline"):
+                r = ov.snap_to_text(page, fitz.Rect(s, e).normalize())
+                if kind == "underline" and r == fitz.Rect(s, e).normalize():
+                    r = fitz.Rect(min(s[0], e[0]), e[1] - 1, max(s[0], e[0]), e[1] + 1)
+                s, e = (r.x0, r.y0), (r.x1, r.y1)
+        self.snapshot()
+        self.layer.add_shape(page.xref, kind, s, e, color, text)
+        self.refresh([self.pages.currentRow()])
+
+    def on_object_double_clicked(self, oid):
+        o = self.layer.get(oid)
+        if o is not None and o.kind == "note":
+            self.edit_note(oid)
+
+    def edit_note(self, oid):
+        o = self.layer.get(oid)
+        text, ok = QInputDialog.getMultiLineText(self, "메모", "메모 내용:", o.text)
+        if ok and text != o.text:
+            self.snapshot()
+            self.layer.get(oid).text = text
+            self.refresh([self.pages.currentRow()])
+
+    def set_object_color(self, oid, col):
+        if self.layer.get(oid) is None:
+            return
+        self.snapshot()
+        self.layer.get(oid).color = col
+        self.refresh([self.pages.currentRow()])
 
     def _build_insert_menu(self):
         m = self.ins_menu
@@ -588,7 +711,10 @@ class PdfTab(QWidget):
         self.win.toast(f"{ov.KINDS[kind]} 넣음 · 끌어서 이동, 모서리로 크기조절(Shift: 비율 무시), Delete 삭제")
 
     def on_escape(self):
-        if self.view.mode == 'place':
+        if self.view.mode == 'annot':
+            self.set_mode(None)
+            self.win.toast("주석 그리기 끝")
+        elif self.view.mode == 'place':
             self._pending = None
             self.set_mode(None)
             self.win.toast("넣기 취소")
@@ -611,21 +737,34 @@ class PdfTab(QWidget):
         z = self.zoom
         self.snapshot()
         o.rect = (qr.left() / z, qr.top() / z, qr.right() / z, qr.bottom() / z)
+        if o.kind == "note":                             # 메모는 크기 고정
+            o.rect = (o.rect[0], o.rect[1], o.rect[0] + ov.NOTE_SIZE, o.rect[1] + ov.NOTE_SIZE)
         self.layer.move(oid, 0, 0, bounds=page.rect)      # 페이지 밖으로 나가지 않게
         self.sel_obj = oid
         self.refresh([self.pages.currentRow()])
 
     def on_object_menu(self, oid, gpos):
+        o = self.layer.get(oid)
         m = QMenu(self)
+        if o.kind == "note":
+            m.addAction("메모 내용 수정…", lambda: self.edit_note(oid))
+        if not o.is_image:
+            cm = m.addMenu("색 바꾸기")
+            for name, col in ANNOT_COLORS:
+                pm = QPixmap(14, 14)
+                pm.fill(QColor.fromRgbF(*col))
+                cm.addAction(QIcon(pm), name, lambda col=col: self.set_object_color(oid, col))
+        else:
+            m.addAction("원래 비율로 맞추기", lambda: self.reset_aspect(oid))
+        m.addSeparator()
         a = m.addAction("삭제", lambda: self.delete_object(oid))
         a.setShortcut(QKeySequence("Delete"))
         bind_icon(a, "trash", 'text', 18)
-        m.addAction("원래 비율로 맞추기", lambda: self.reset_aspect(oid))
         m.exec(gpos)
 
     def reset_aspect(self, oid):
         o = self.layer.get(oid)
-        if o is None:
+        if o is None or not o.aspect:
             return
         self.snapshot()
         r = o.frect()
@@ -640,7 +779,7 @@ class PdfTab(QWidget):
         self._obj_pix.pop(oid, None)
         self.sel_obj = None
         self.refresh([self.pages.currentRow()])
-        self.win.toast("삽입 객체 삭제")
+        self.win.toast("삭제했습니다 (Ctrl+Z로 되돌리기)")
 
     # ── 기존 글자 수정 ──
     def _view_rect(self, page, rect):
@@ -836,6 +975,11 @@ class PdfTab(QWidget):
             self._pending = None
         if m is not None:
             self.sel_obj = None
+        if m != 'annot':
+            self.annot_kind = None
+            for a in self.ann_actions.values():
+                a.setChecked(False)
+            self.btn_annot.setChecked(False)
         self.a_text.setChecked(m == 'text')
         self.a_white.setChecked(m == 'white')
         self.a_edit.setChecked(m == 'edit')
