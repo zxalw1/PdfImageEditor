@@ -17,7 +17,7 @@
 - PC에 MS Office 설치됨, AhnLab V3 설치됨 (PyInstaller exe 오탐 가능성 주의)
 - 스택: PySide6 / PyMuPDF(`import pymupdf as fitz`) / Pillow / pillow-heif / openpyxl / pdf2docx / pywin32 / PyInstaller / Inno Setup 6
 
-## 현재 상태 (v1.1.0)
+## 현재 상태 (v1.1.1)
 진입점 `main.py` + `app/` 패키지 (작업목록 1번 구조, v1.0.0 단일 파일은 git 태그 `v1.0.0`).
 `app/core`는 Qt 없음(pytest 대상), 무거운 작업은 `app/ui/workers.py`의 `run_task()`(QThread+진행률/취소).
 UI(작업목록 2번 완료): `app/ui/theme.py` 색 토큰(LIGHT/DARK)·QSS·`bind_icon()`(테마 전환 시 자동 재착색), 다크모드 설정은 QSettings 저장.
