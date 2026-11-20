@@ -17,7 +17,14 @@
 - PC에 MS Office 설치됨, AhnLab V3 설치됨 (PyInstaller exe 오탐 가능성 주의)
 - 스택: PySide6 / PyMuPDF(`import pymupdf as fitz`) / Pillow / pillow-heif / openpyxl / pdf2docx / pywin32 / PyInstaller / Inno Setup 6
 
-## 현재 상태 (v1.3.0)
+## 현재 상태 (v1.8.0) — 작업목록 1~4번 완료, 5번(배포) 남음
+작업목록 4번 (v1.3.0~v1.8.0):
+- 주석(v1.4): ObjectLayer 에 도형 종류 추가(highlight/underline/rect/arrow/note), 저장 시 실제 PDF 주석으로. 형광펜·밑줄은 글자 줄에 맞춤
+- 페이지 꾸미기(v1.5): `app/core/page_deco.py` 페이지 번호·머리글/바닥글({page}{total}{date}{file})·워터마크(글자/이미지), 미리보기 대화상자
+- 페이지 끌어오기(v1.6): PageList 가 놓은 위치를 직접 계산(movedTo/filesDroppedAt/pagesDroppedAt), 다른 PDF 페이지 창(PagePickerWindow)
+- 용량 줄이기(v1.7): `app/core/compress.py` (MuPDF rewrite_images, 정수 배율 축소라 결과 DPI 는 목표의 ~1.2배까지)
+- 보기(v1.8): Ctrl+휠 확대/축소, 연속 스크롤(페이지별 PageView, 보이는 것만 렌더, `pdf_tab.view` = 현재 페이지 뷰 속성)
+- 툴바 폭이 1320px 에 꽉 참 → 새 버튼은 "더보기"/"삽입" 메뉴로
 이미지·서명·도장 삽입(작업목록 4번 중 1번 + 4번의 객체 관리 일부): `app/core/overlay.py` ObjectLayer
 (페이지 xref 기준·회전 후 좌표, 저장/추출/분할 시 flatten, 회전하는 페이지는 먼저 합침), 실행취소는 (PDF bytes, 레이어) 쌍.
 UI: 툴바 "삽입" 메뉴(이미지 / 도장·서명 이미지 흰 배경 제거 / 서명 그리기 / 저장된 서명), 클릭=기본 크기·드래그=크기 지정,

@@ -108,8 +108,8 @@ QToolButton#Nav:hover {{ background:{c['hover']}; }}
 QToolButton#Nav:checked {{ background:{c['accent_soft']}; color:{c['accent']}; font-weight:600; }}
 
 QToolBar {{ background:{c['surface']}; border:none; border-bottom:1px solid {c['border']}; padding:4px 8px; spacing:2px; }}
-QToolBar::separator {{ width:1px; background:{c['border']}; margin:8px 4px; }}
-QToolButton {{ border:none; border-radius:6px; padding:4px 4px; background:transparent; }}
+QToolBar::separator {{ width:1px; background:{c['border']}; margin:8px 2px; }}
+QToolButton {{ border:none; border-radius:6px; padding:4px 2px; background:transparent; }}
 QToolButton:hover {{ background:{c['hover']}; }}
 QToolButton:pressed {{ background:{c['border']}; }}
 QToolButton:checked {{ background:{c['accent_soft']}; color:{c['accent']}; }}

@@ -2,7 +2,7 @@
 """PDF 편집 탭"""
 import os
 
-from PySide6.QtCore import Qt, QSize, QRectF
+from PySide6.QtCore import Qt, QSize, QRectF, QPoint
 from PySide6.QtGui import QPixmap, QColor, QAction, QKeySequence, QPainter, QIcon
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QToolBar, QToolButton, QLabel, QSpinBox,
@@ -31,7 +31,7 @@ ANNOT_COLORS = [("노랑", (1.0, 0.9, 0.0)), ("초록", (0.3, 0.85, 0.35)), ("�
                 ("하늘", (0.35, 0.75, 1.0)), ("빨강", (0.86, 0.15, 0.15)), ("파랑", (0.15, 0.35, 0.9)),
                 ("검정", (0.1, 0.1, 0.1))]
 FIT = "폭 맞춤"
-ZOOMS = [FIT, "50%", "75%", "100%", "125%", "150%", "200%"]
+ZOOMS = [FIT, "25%", "50%", "75%", "100%", "125%", "150%", "200%", "300%", "400%"]
 
 
 class PdfTab(QWidget):
@@ -215,12 +215,14 @@ class PdfTab(QWidget):
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         tb.addWidget(spacer)
         # 보기
-        self.a_zout = self._act("zoom-out", "", lambda: self.step_zoom(-1), "Ctrl+-", tip="축소")
+        self.a_cont = self._act("scroll-view", "", lambda c: self.set_continuous(c), checkable=True,
+                                tip="페이지 이어서 보기 (연속 스크롤)")
+        self.a_zout =self._act("zoom-out", "", lambda: self.step_zoom(-1), "Ctrl+-", tip="축소")
         self.cb_zoom = QComboBox()
         self.cb_zoom.addItems(ZOOMS)
         self.cb_zoom.setCurrentText(FIT)
         self.cb_zoom.setFixedWidth(92)
-        self.cb_zoom.currentTextChanged.connect(lambda _: self.render_preview())
+        self.cb_zoom.currentTextChanged.connect(lambda _: (setattr(self, "_jump", True), self.render_preview()))
         tb.addWidget(self.cb_zoom)
         self.a_zin = self._act("zoom-in", "", lambda: self.step_zoom(1), "Ctrl+=", tip="확대")
 
@@ -245,32 +247,35 @@ class PdfTab(QWidget):
         eh.setSpacing(12)
         self.pages = PageList()
         self.pages.setFixedWidth(184)
-        self.pages.currentRowChanged.connect(lambda _: self.render_preview())
+        self._jump = False
+        self.pages.currentRowChanged.connect(lambda _: (setattr(self, "_jump", True), self.render_preview()))
         self.pages.movedTo.connect(self.on_moved_to)
         self.pages.filesDroppedAt.connect(self.on_files_dropped_at)
         self.pages.pagesDroppedAt.connect(self.on_pages_dropped_at)
         self._sources = {}              # 다른 PDF 토큰 → 문서
         self._picker = None
         eh.addWidget(self.pages)
+        # 미리보기: 캔버스 위에 PageView 들 (한 페이지 보기 = 1개, 연속 보기 = 페이지 수만큼, 보이는 것만 그림)
         self.scroll = QScrollArea(objectName="Viewer")
-        self.scroll.setAlignment(Qt.AlignCenter)
-        self.view = PageView()
-        self.view.clicked.connect(self.on_text_click)
-        self.view.dragged.connect(self.on_white_drag)
-        self.view.editRequested.connect(self.start_edit)
-        self.view.emptyClicked.connect(self.on_edit_empty_click)
-        self.view.objectSelected.connect(self.on_object_selected)
-        self.view.objectChanged.connect(self.on_object_changed)
-        self.view.objectMenu.connect(self.on_object_menu)
-        self.view.placeRequested.connect(self.on_place)
-        self.view.annotDrawn.connect(self.on_annot_drawn)
-        self.view.objectDoubleClicked.connect(self.on_object_double_clicked)
-        self.view.escapePressed.connect(self.on_escape)
+        self.scroll.setWidgetResizable(True)
+        self.canvas = QWidget(objectName="Canvas")
+        self.canvas_lay = QVBoxLayout(self.canvas)
+        self.canvas_lay.setContentsMargins(20, 20, 20, 20)
+        self.canvas_lay.setSpacing(16)
+        self.canvas_lay.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
+        self.scroll.setWidget(self.canvas)
+        self.scroll.verticalScrollBar().valueChanged.connect(self._on_scroll)
+        self.scroll.viewport().installEventFilter(self)
+        self._views = []
+        self._render_gen = 0            # 문서 내용이 바뀔 때마다 증가 → 다시 그림
+        self._scroll_sync = False
+        self._view_mode = None
+        self.continuous = theme.settings().value("continuous", False, type=bool)
+        self.a_cont.setChecked(self.continuous)
+        self._make_views(1)
         self.pages.itemPressed.connect(lambda _it: self._deselect_object())
         self._editor = None             # InlineTextEditor
         self._edit_unit = None
-        self.scroll.setWidget(self.view)
-        self.scroll.setWidgetResizable(False)
         eh.addWidget(self.scroll, 1)
         self.body.addWidget(ed)
         v.addWidget(self.body, 1)
@@ -279,7 +284,7 @@ class PdfTab(QWidget):
         self.edit_actions = [self.a_save, self.a_saveas, self.a_rl, self.a_rr, self.a_del, self.a_blank,
                              self.a_up, self.a_dn, self.a_ext, self.a_split, self.a_text, self.a_white,
                              self.a_repl, self.a_zin, self.a_zout, self.a_edit, self.a_deco, self.a_pick,
-                             self.a_compress]
+                             self.a_compress, self.a_cont]
         self.edit_widgets = [self.font_box, self.cb_zoom, self.btn_edit, self.btn_insert, self.btn_annot]
 
     def _paint_color_btn(self):
@@ -474,6 +479,7 @@ class PdfTab(QWidget):
 
     # ── 화면 ──
     def refresh(self, select=None):
+        self._render_gen += 1                # 내용이 바뀜 → 미리보기 다시 그림
         self.pages.blockSignals(True)
         self.pages.clear()
         if self.doc is not None:
@@ -525,26 +531,206 @@ class PdfTab(QWidget):
             i = min(max(1, i + d), len(ZOOMS) - 1)
         self.cb_zoom.setCurrentIndex(i)
 
+    # ── 미리보기 (한 페이지 / 연속 스크롤) ──
+    @property
+    def view(self):
+        """현재 페이지의 PageView"""
+        if self.continuous and len(self._views) > 1:
+            r = self.pages.currentRow()
+            if 0 <= r < len(self._views):
+                return self._views[r]
+        return self._views[0]
+
+    def _make_views(self, n):
+        for v in self._views:
+            self.canvas_lay.removeWidget(v)
+            v.hide()
+            v.deleteLater()
+        self._views = []
+        for i in range(max(1, n)):
+            v = PageView()
+            v.index = i
+            v.rendered_key = None
+            self._connect_view(v)
+            v.set_mode(self._view_mode)
+            for k in ("annot_kind", "annot_color", "place_aspect"):
+                if hasattr(self, "_va_" + k):
+                    setattr(v, k, getattr(self, "_va_" + k))
+            self.canvas_lay.addWidget(v)
+            self._views.append(v)
+
+    def _connect_view(self, v):
+        def route(slot):
+            def f(*a):
+                self._make_current(v)        # 다른 페이지를 건드리면 그 페이지가 현재 페이지
+                return slot(*a)
+            return f
+        v.clicked.connect(route(self.on_text_click))
+        v.dragged.connect(route(self.on_white_drag))
+        v.editRequested.connect(route(self.start_edit))
+        v.emptyClicked.connect(route(self.on_edit_empty_click))
+        v.objectSelected.connect(route(self.on_object_selected))
+        v.objectChanged.connect(route(self.on_object_changed))
+        v.objectMenu.connect(route(self.on_object_menu))
+        v.placeRequested.connect(route(self.on_place))
+        v.annotDrawn.connect(route(self.on_annot_drawn))
+        v.objectDoubleClicked.connect(route(self.on_object_double_clicked))
+        v.escapePressed.connect(self.on_escape)
+
+    def _set_view_attr(self, name, value):
+        setattr(self, "_va_" + name, value)
+        for v in self._views:
+            setattr(v, name, value)
+
+    def _make_current(self, v):
+        if not self.continuous or v.index == self.pages.currentRow():
+            return
+        self.finish_edit(commit=True)
+        self.pages.blockSignals(True)
+        self.pages.setCurrentRow(v.index)
+        self.pages.clearSelection()
+        self.pages.item(v.index).setSelected(True)
+        self.pages.blockSignals(False)
+        self.pages.scrollToItem(self.pages.item(v.index))
+        self._after_current_changed()
+
+    def _after_current_changed(self):
+        cur = self.view
+        for v in self._views:
+            if v is not cur:
+                v.set_edit_items([])
+                if v.sel_id is not None:
+                    v.sel_id = None
+                    v.update()
+        self._update_status_only()
+        self._load_edit_items()
+        page = self.current_page()
+        if page is not None and (self.layer.get(self.sel_obj) is None
+                                 or self.layer.get(self.sel_obj).page_xref != page.xref):
+            self.sel_obj = None
+
+    def set_continuous(self, on):
+        self.finish_edit(commit=True)
+        self.continuous = bool(on)
+        self.a_cont.setChecked(self.continuous)
+        theme.settings().setValue("continuous", self.continuous)
+        self._make_views(self.doc.page_count if (self.continuous and self.doc is not None) else 1)
+        self.render_preview()
+        self.win.toast("연속 스크롤 보기" if self.continuous else "한 페이지씩 보기")
+
+    def _compute_zoom(self, page):
+        z = self.cb_zoom.currentText()
+        if z == FIT:
+            w = max(200, self.scroll.viewport().width() - 44)
+            self.zoom = w / page.rect.width
+        else:
+            self.zoom = int(z.rstrip('%')) / 100
+
+    def _render_view(self, v):
+        if self.doc is None or v.index >= self.doc.page_count:
+            return
+        key = (self._render_gen, round(self.zoom, 5), v.index, self.doc.page_count)
+        if v.rendered_key == key:
+            return
+        page = self.doc[v.index]
+        pix = page.get_pixmap(matrix=fitz.Matrix(self.zoom, self.zoom), alpha=False)
+        pm = QPixmap.fromImage(pix_to_qimage(pix))
+        v.setPixmap(pm)
+        v.setFixedSize(pm.size())
+        v.rendered_key = key
+        self._load_objects_for(v, with_sel=(v is self.view))
+
+    def _layout_tops(self):
+        """연속 보기에서 각 페이지의 캔버스 안 위쪽 위치·높이 (위젯이 아직 안 그려져도 계산 가능)"""
+        m, gap = self.canvas_lay.contentsMargins().top(), self.canvas_lay.spacing()
+        tops, y = [], m
+        for i in range(self.doc.page_count):
+            h = int(self.doc[i].rect.height * self.zoom)
+            tops.append((y, h))
+            y += h + gap
+        self._tops = tops
+        return tops
+
+    def _render_visible(self):
+        top = self.scroll.verticalScrollBar().value()
+        h = self.scroll.viewport().height()
+        tops = getattr(self, "_tops", None) or self._layout_tops()
+        for v in self._views:
+            if v.index < len(tops):
+                y, ph = tops[v.index]
+                if y + ph >= top - h // 2 and y <= top + h + h // 2:
+                    self._render_view(v)
+
+    def _on_scroll(self, _value):
+        if not self.continuous or self.doc is None or len(self._views) < 2 or self._scroll_sync:
+            if self.continuous and self.doc is not None and len(self._views) > 1:
+                self._render_visible()
+            return
+        self._render_visible()
+        line = self.scroll.verticalScrollBar().value() + self.scroll.viewport().height() / 3
+        tops = self._tops
+        idx = next((i for i, (y, ph) in enumerate(tops) if y <= line <= y + ph + self.canvas_lay.spacing()), None)
+        if idx is not None and idx != self.pages.currentRow():
+            self._scroll_sync = True
+            self._make_current(self._views[idx])
+            self._scroll_sync = False
+
+    def eventFilter(self, obj, e):
+        from PySide6.QtCore import QEvent
+        if obj is self.scroll.viewport() and e.type() == QEvent.Wheel and e.modifiers() & Qt.ControlModifier:
+            if self.doc is not None:                      # Ctrl+휠 = 확대/축소
+                self.step_zoom(1 if e.angleDelta().y() > 0 else -1)
+            return True
+        return super().eventFilter(obj, e)
+
     def render_preview(self):
         self.finish_edit(commit=True)      # 페이지·배율이 바뀌면 열린 편집은 반영하고 닫음
         page = self.current_page()
         if page is None:
-            self.view.clear()
-            self.view.set_edit_items([])
-            self.view.set_objects([])
+            if len(self._views) > 1:
+                self._make_views(1)
+            v = self._views[0]
+            v.clear()
+            v.rendered_key = None
+            v.set_edit_items([])
+            v.set_objects([])
             if self.doc is None:
                 self._update_status_only()
             return
-        z = self.cb_zoom.currentText()
-        if z == FIT:
-            w = max(200, self.scroll.viewport().width() - 40)
-            self.zoom = w / page.rect.width
+        self._compute_zoom(page)
+        if self.continuous:
+            n = self.doc.page_count
+            if len(self._views) != n:
+                self._make_views(n)
+            z = self.zoom
+            for v in self._views:                         # 자리만 먼저 잡고, 보이는 것만 그림
+                r = self.doc[v.index].rect
+                if v.rendered_key is None or v.rendered_key[1:] != (round(z, 5), v.index, n):
+                    v.clear()
+                    v.setFixedSize(int(r.width * z), int(r.height * z))
+            tops = self._layout_tops()
+            self.canvas.setMinimumHeight(tops[-1][0] + tops[-1][1] + self.canvas_lay.contentsMargins().bottom())
+            cur = self.view
+            cy, ch = tops[cur.index]
+            sb = self.scroll.verticalScrollBar()
+            sb.setMaximum(max(sb.maximum(), self.canvas.minimumHeight() - self.scroll.viewport().height()))
+            vis_top, vis_bot = sb.value(), sb.value() + self.scroll.viewport().height()
+            off_screen = cy + ch < vis_top or cy > vis_bot
+            # 썸네일 클릭·배율 변경 때, 또는 현재 페이지가 화면 밖일 때만 그 페이지로 이동 (편집 중엔 화면 유지)
+            if not self._scroll_sync and (self._jump or off_screen):
+                self._scroll_sync = True             # 아래 setValue 가 현재 페이지를 바꾸지 않게
+                sb.setValue(max(0, cy - 12))
+                self._scroll_sync = False
+            self._jump = False
+            self._render_view(cur)
+            self._render_visible()
         else:
-            self.zoom = int(z.rstrip('%')) / 100
-        pix = page.get_pixmap(matrix=fitz.Matrix(self.zoom, self.zoom), alpha=False)
-        pm = QPixmap.fromImage(pix_to_qimage(pix))
-        self.view.setPixmap(pm)
-        self.view.resize(pm.size())
+            if len(self._views) != 1:
+                self._make_views(1)
+            self.canvas.setMinimumHeight(0)
+            v = self._views[0]
+            v.index = self.pages.currentRow()
+            self._render_view(v)
         self._update_status_only()
         self._load_edit_items()
         self._load_objects()
@@ -563,11 +749,17 @@ class PdfTab(QWidget):
         if page is None:
             self.view.set_objects([])
             return
-        z = self.zoom
-        items = [self._obj_item(o, z) for o in self.layer.on_page(page.xref)]
         if self.layer.get(self.sel_obj) is None or self.layer.get(self.sel_obj).page_xref != page.xref:
             self.sel_obj = None
-        self.view.set_objects(items, self.sel_obj)
+        self._load_objects_for(self.view, with_sel=True)
+
+    def _load_objects_for(self, v, with_sel=False):
+        if self.doc is None or v.index >= self.doc.page_count:
+            v.set_objects([])
+            return
+        page = self.doc[v.index]
+        items = [self._obj_item(o, self.zoom) for o in self.layer.on_page(page.xref)]
+        v.set_objects(items, self.sel_obj if with_sel else None)
 
     def _obj_item(self, o, z):
         """PageView 에 넘길 표시용 정보 (z: 배율)"""
@@ -590,8 +782,8 @@ class PdfTab(QWidget):
         for k, a in self.ann_actions.items():
             a.setChecked(k == kind)
         self.btn_annot.setChecked(True)
-        self.view.annot_kind = kind
-        self.view.annot_color = self.annot_color or ov.DEFAULT_COLORS[kind]
+        self._set_view_attr("annot_kind", kind)
+        self._set_view_attr("annot_color", self.annot_color or ov.DEFAULT_COLORS[kind])
         how = "클릭해서 메모 붙이기" if kind == "note" else "드래그해서 그리기"
         self.win.toast(f"{ov.SHAPE_KINDS[kind]}: {how} · 계속 그릴 수 있습니다 (Esc 끝내기)", ms=8000)
 
@@ -600,7 +792,7 @@ class PdfTab(QWidget):
         for a, c in self.color_actions:
             a.setChecked(c == col)
         if self.annot_kind:
-            self.view.annot_color = col or ov.DEFAULT_COLORS[self.annot_kind]
+            self._set_view_attr("annot_color", col or ov.DEFAULT_COLORS[self.annot_kind])
 
     def on_annot_drawn(self, s, e):
         page = self.current_page()
@@ -703,7 +895,7 @@ class PdfTab(QWidget):
             return
         self._pending = (data, size, kind)
         self.set_mode('place')
-        self.view.place_aspect = size[0] / size[1]
+        self._set_view_attr("place_aspect", size[0] / size[1])
         self.win.toast(f"{ov.KINDS[kind]}: 페이지를 클릭하거나 드래그해서 위치·크기를 정하세요 (Esc 취소)", ms=8000)
 
     def on_place(self, qr):
@@ -853,7 +1045,8 @@ class PdfTab(QWidget):
         ed.move(x, y)
         self._editor, self._edit_unit = ed, unit
         ed.focus()
-        self.scroll.ensureVisible(x + ed.width() // 2, y + ed.height(), 40, 40)
+        p = self.view.mapTo(self.canvas, QPoint(x + ed.width() // 2, y + ed.height()))
+        self.scroll.ensureVisible(p.x(), p.y(), 40, 40)
 
     def finish_edit(self, commit=True):
         ed, unit = self._editor, self._edit_unit
@@ -1098,7 +1291,9 @@ class PdfTab(QWidget):
         self.a_text.setChecked(m == 'text')
         self.a_white.setChecked(m == 'white')
         self.a_edit.setChecked(m == 'edit')
-        self.view.set_mode(m)
+        self._view_mode = m
+        for v in self._views:
+            v.set_mode(m)
         self._load_edit_items()
         if self.doc is not None:
             self._load_objects()
