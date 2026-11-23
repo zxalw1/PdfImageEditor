@@ -32,6 +32,9 @@ jobs:
           $setup = Get-ChildItem dist\PdfImageEditor_Setup_v*.exe | Select-Object -First 1
           if (Test-Path release_notes.txt) { python tools/make_update_json.py $setup.FullName --notes release_notes.txt }
           else { python tools/make_update_json.py $setup.FullName --notes "${{ github.ref_name }}" }
+          # 버전 없는 이름으로도 한 부 → 고정 다운로드 링크
+          # https://github.com/<계정>/<저장소>/releases/latest/download/PdfImageEditor_Setup.exe
+          Copy-Item $setup.FullName dist\PdfImageEditor_Setup.exe
       - uses: actions/upload-artifact@v4
         with:
           name: PdfImageEditor_Setup
@@ -46,4 +49,5 @@ jobs:
         with:
           files: |
             dist/PdfImageEditor_Setup_*.exe
+            dist/PdfImageEditor_Setup.exe
             dist/update.json

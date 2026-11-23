@@ -22,6 +22,8 @@
 - 주의: Git Bash 로 파이썬 스크립트에 한글을 넘기면 cp949 로 깨짐 → 한글 포함 수정은 Edit 도구로
 - v1.9.0: 자동 업데이트(app/core/updater.py, app/ui/updates.py, UPDATE_URL 또는 update_url.txt), PDF→Word(pdf2docx) 제거, 빌드는 tools/build_exe.py(모듈 제외·파일 정리·exe --selftest), tools/make_update_json.py, installer [InstallDelete] _internal + 조용한 설치 후 자동 재실행
 - 배포(v1.9.3~): 저장소 https://github.com/zxalw1/PdfImageEditor (공개). UPDATE_URL = releases/latest/download/update.json
+  직원용 고정 다운로드 링크(v1.10.0 다음 릴리스부터): https://github.com/zxalw1/PdfImageEditor/releases/latest/download/PdfImageEditor_Setup.exe
+  (workflow 가 버전 없는 이름으로 한 부 더 올림)
   새 버전 내는 법: 버전 올림(app/__init__.py·version_info.txt·installer.iss·build.bat) → release_notes.txt 수정 → 커밋 → `git push origin main` → `git tag vX.Y.Z` → `git push origin vX.Y.Z`
   → Actions 가 테스트·빌드·자가진단·설치파일·update.json·릴리스까지 자동. (예전 태그 v1.0.0~v1.9.2 는 로컬에만, 올리지 말 것: 태그마다 빌드 실행됨)
   설치된 앱은 시작 2.5초 뒤 확인 → 안내 → 받기·sha256 → /AUTOUPDATE=1 조용히 재설치 → 자동 재실행 (설치본 E2E 확인 완료)
