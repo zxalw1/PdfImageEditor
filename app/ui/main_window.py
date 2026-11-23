@@ -52,7 +52,7 @@ class MainWindow(QMainWindow):
         u = update_url() or "설정 안 됨"
         QMessageBox.about(self, APP_NAME,
                           f"<b>{APP_NAME}</b><br>버전 v{VERSION}<br><br>"
-                          f"업데이트 주소: {u}<br>오류 기록: {LOG_DIR}<br><br>© CNC International")
+                          f"업데이트 주소: {u}<br>오류 기록: {LOG_DIR}")
 
     # ── 내비게이션 ──
     def _build_nav(self):

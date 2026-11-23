@@ -17,7 +17,7 @@
 - PC에 MS Office 설치됨, AhnLab V3 설치됨 (PyInstaller exe 오탐 가능성 주의)
 - 스택: PySide6 / PyMuPDF(`import pymupdf as fitz`) / Pillow / pillow-heif / openpyxl / pdf2docx / pywin32 / PyInstaller / Inno Setup 6
 
-## 현재 상태 (v1.10.1) — 작업목록 1~5번 완료
+## 현재 상태 (v1.10.2) — 작업목록 1~5번 완료
 - v1.10.0: 사진 이어붙이기(image_ops.stitch_* , dialogs.StitchDialog, 형식별 최대 변 FORMAT_MAX_SIDE), PDF→이미지 "전체 1장"(convert_ops.pdf_to_single_images), Qt 한국어 번역(theme.install_korean, 빌드에 qtbase_ko·qt_ko 만 남김, 저장 확인 창은 "저장 안 함" 직접 지정), 툴바 보기 영역 ViewBox 로 묶음
 - 주의: Git Bash 로 파이썬 스크립트에 한글을 넘기면 cp949 로 깨짐 → 한글 포함 수정은 Edit 도구로
 - v1.9.0: 자동 업데이트(app/core/updater.py, app/ui/updates.py, UPDATE_URL 또는 update_url.txt), PDF→Word(pdf2docx) 제거, 빌드는 tools/build_exe.py(모듈 제외·파일 정리·exe --selftest), tools/make_update_json.py, installer [InstallDelete] _internal + 조용한 설치 후 자동 재실행

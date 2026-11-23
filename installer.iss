@@ -1,15 +1,13 @@
 ﻿; PDF·이미지 통합 편집기 설치 스크립트 (Inno Setup 6)
 #define MyAppName "PDF·이미지 통합 편집기"
 #define MyAppExeName "PdfImageEditor.exe"
-#define MyAppVersion "1.10.1"
-#define MyAppPublisher "CNC International"
+#define MyAppVersion "1.10.2"
 
 [Setup]
 AppId={{D075CAF7-F477-469F-B683-E493FA2A8A0D}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppVerName={#MyAppName} {#MyAppVersion}
-AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\PdfImageEditor
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
