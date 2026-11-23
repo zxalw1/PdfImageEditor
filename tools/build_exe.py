@@ -40,7 +40,7 @@ REMOVE_AFTER = [
     "PySide6/Qt6Pdf*.dll", "PySide6/Qt6OpenGL*.dll", "PySide6/Qt6Network.dll",
     "PySide6/plugins/platforminputcontexts", "PySide6/plugins/imageformats/qpdf.dll",
     "PySide6/plugins/generic", "PySide6/plugins/networkinformation", "PySide6/plugins/tls",
-    "PySide6/translations",
+    # 번역은 한국어(qtbase_ko·qt_ko)만 남김 → 저장/취소 등 기본 버튼 한글
     # ※ libx265*.dll 은 지우면 안 됨: pillow_heif 가 직접 불러와 HEIC '읽기'까지 실패 (자가진단으로 확인)
 ]
 
@@ -72,6 +72,11 @@ def pyinstaller():
 
 def trim():
     before = size_mb(DIST)
+    tr = os.path.join(INTERNAL, "PySide6", "translations")
+    if os.path.isdir(tr):
+        for f in os.listdir(tr):
+            if f not in ("qtbase_ko.qm", "qt_ko.qm"):
+                os.remove(os.path.join(tr, f))
     for pat in REMOVE_AFTER:
         for p in glob.glob(os.path.join(INTERNAL, pat)):
             if os.path.isdir(p):

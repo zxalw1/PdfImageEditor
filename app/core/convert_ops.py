@@ -140,6 +140,53 @@ def pdf_to_images(jobs, fmt, dpi, quality, task=None):
     return total, errs
 
 
+def pdf_to_single_images(jobs, fmt, dpi, quality, gap=20, task=None):
+    """PDF 1개 → 모든 페이지를 세로로 이어붙인 이미지 1장. (저장 수, 오류 목록, 안내 목록)
+    결과가 형식 한계(JPG 65500px, WEBP 16383px)를 넘으면 해상도를 자동으로 낮춘다"""
+    from .image_ops import stitch_images, StitchOptions, FORMAT_MAX_SIDE, FIT_NONE, VERTICAL
+    task = task_or_null(task)
+    total, errs, notes, done = 0, [], [], 0
+    limit = FORMAT_MAX_SIDE.get(fmt, 20000)
+    for job in jobs:
+        if task.cancelled():
+            break
+        try:
+            rects = [job.doc[i].rect for i in job.pages]
+            px = dpi / 72
+            tall = sum(r.height * px for r in rects) + gap * (len(rects) - 1)
+            wide = max(r.width * px for r in rects)
+            use_dpi = dpi
+            if max(tall, wide) > limit:
+                use_dpi = max(20, int(dpi * (limit - gap * len(rects)) / max(tall, wide)))
+                notes.append(f"{job.name}: 이미지가 너무 길어 해상도를 {dpi} → {use_dpi} DPI 로 낮춤")
+            images = []
+            for i in job.pages:
+                if task.cancelled():
+                    break
+                task.report(done, f"{job.name} {i + 1}페이지 그리는 중...")
+                pix = job.doc[i].get_pixmap(dpi=use_dpi, alpha=False)
+                images.append(Image.frombytes("RGB", (pix.width, pix.height), pix.samples))
+                done += 1
+                task.report(done)
+            if task.cancelled() or not images:
+                break
+            task.report(done, f"{job.name} 이어붙이는 중...")
+            out = stitch_images(images, StitchOptions(VERTICAL, fit=FIT_NONE, gap=gap, bg=(229, 231, 235),
+                                                      max_side=limit))
+            os.makedirs(job.out_dir, exist_ok=True)
+            dst = unique_path(os.path.join(job.out_dir, f"{job.base}_전체{EXT_OF[fmt]}"))
+            if fmt == "PNG":
+                out.save(dst, "PNG", optimize=True, dpi=(use_dpi, use_dpi))
+            elif fmt == "JPG":
+                out.save(dst, "JPEG", quality=quality, optimize=True, dpi=(use_dpi, use_dpi))
+            else:
+                out.save(dst, "WEBP", quality=quality)
+            total += 1
+        except Exception as ex:
+            errs.append(f"{job.name}: {ex}")
+    return total, errs, notes
+
+
 # ── 이미지 → PDF ──
 def images_to_pdf_each(paths, out_dir, size_mode, margin_mm, quality, task=None):
     task = task_or_null(task)

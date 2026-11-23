@@ -590,3 +590,148 @@ class ReplaceDialog(QDialog):
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
         f.addRow(bb)
+
+
+class StitchDialog(QDialog):
+    """사진 이어붙이기: 방향·크기 맞춤·간격·배경 설정 + 미리보기 → 저장"""
+    DIRS = [("세로로 (아래로 이어붙이기)", "vertical"), ("가로로 (옆으로 이어붙이기)", "horizontal"),
+            ("격자 (바둑판)", "grid")]
+    FITS = [("작은 사진 크기에 맞춤", "min"), ("큰 사진 크기에 맞춤", "max"), ("원본 크기 그대로", "none")]
+    BGS = [("흰색", (255, 255, 255)), ("검정", (0, 0, 0)), ("연한 회색", (229, 231, 235)), ("투명 (PNG)", None)]
+
+    def __init__(self, paths, parent=None):
+        super().__init__(parent)
+        from PySide6.QtCore import QTimer
+        from PySide6.QtWidgets import QScrollArea, QSlider
+        from app.core import image_ops as io_
+        self.io = io_
+        self.paths = list(paths)
+        self.setWindowTitle(f"사진 이어붙이기 · {len(self.paths)}장")
+        self.resize(980, 640)
+        # 미리보기용 작은 사진 (원본 비율 유지, 모두 같은 배율로 줄여야 크기 맞춤 계산이 같음)
+        self.sizes, thumbs = [], []
+        for p in self.paths:
+            im = io_.open_image(p)
+            self.sizes.append(im.size)
+            thumbs.append(im)
+        big = max(max(s) for s in self.sizes)
+        self.k = min(1.0, 500 / big)
+        self.thumbs = [t.resize((max(1, round(t.width * self.k)), max(1, round(t.height * self.k))))
+                       for t in thumbs]
+        del thumbs
+
+        root = QHBoxLayout(self)
+        root.setSpacing(14)
+        left = QWidget()
+        f = QFormLayout(left)
+        f.setSpacing(10)
+        self.cb_dir = QComboBox()
+        self.cb_dir.addItems([d[0] for d in self.DIRS])
+        f.addRow("방향", self.cb_dir)
+        self.sp_cols = QSpinBox()
+        self.sp_cols.setRange(1, 20)
+        self.sp_cols.setValue(min(3, max(2, round(len(self.paths) ** 0.5))))
+        self.sp_cols.setSuffix(" 열")
+        f.addRow("격자 열 수", self.sp_cols)
+        self.cb_fit = QComboBox()
+        self.cb_fit.addItems([x[0] for x in self.FITS])
+        f.addRow("크기", self.cb_fit)
+        self.sp_gap = QSpinBox()
+        self.sp_gap.setRange(0, 500)
+        self.sp_gap.setSuffix(" px")
+        f.addRow("사진 사이 간격", self.sp_gap)
+        self.sp_margin = QSpinBox()
+        self.sp_margin.setRange(0, 500)
+        self.sp_margin.setSuffix(" px")
+        f.addRow("바깥 여백", self.sp_margin)
+        self.cb_bg = QComboBox()
+        self.cb_bg.addItems([b[0] for b in self.BGS])
+        f.addRow("배경색", self.cb_bg)
+        self.cb_fmt = QComboBox()
+        self.cb_fmt.addItems(["JPG", "PNG", "WEBP"])
+        f.addRow("저장 형식", self.cb_fmt)
+        self.sp_q = QSpinBox()
+        self.sp_q.setRange(10, 100)
+        self.sp_q.setValue(90)
+        f.addRow("품질(JPG/WEBP)", self.sp_q)
+        th = QHBoxLayout()
+        self.cb_target = QCheckBox("목표 용량 이하")
+        self.sp_target = QSpinBox()
+        self.sp_target.setRange(10, 100000)
+        self.sp_target.setValue(1000)
+        self.sp_target.setSuffix(" KB")
+        th.addWidget(self.cb_target)
+        th.addWidget(self.sp_target)
+        f.addRow(th)
+        cap = QLabel("목록 순서대로 붙습니다. 순서는 사진 목록에서 ▲▼·끌어서 바꾸세요.", objectName="Caption")
+        cap.setWordWrap(True)
+        f.addRow(cap)
+        left.setMinimumWidth(360)
+        left.setMaximumWidth(400)
+        root.addWidget(left)
+
+        right = QFrame(objectName="Card")
+        rv = QVBoxLayout(right)
+        rv.setContentsMargins(12, 10, 12, 12)
+        rv.addWidget(QLabel("미리보기", objectName="H2"))
+        self.lb_prev = QLabel(objectName="Preview")
+        self.lb_prev.setAlignment(Qt.AlignCenter)
+        self.lb_prev.setMinimumSize(460, 420)
+        rv.addWidget(self.lb_prev, 1)
+        self.lb_size = QLabel("", objectName="Muted")
+        rv.addWidget(self.lb_size)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.button(QDialogButtonBox.Ok).setText("저장…")
+        bb.button(QDialogButtonBox.Ok).setObjectName("Primary")
+        bb.button(QDialogButtonBox.Cancel).setText("취소")
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        rv.addWidget(bb)
+        root.addWidget(right, 1)
+
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(120)
+        self._timer.timeout.connect(self.update_preview)
+        for w in (self.cb_dir, self.cb_fit, self.cb_bg, self.cb_fmt):
+            w.currentIndexChanged.connect(lambda *_: self._timer.start())
+        for w in (self.sp_cols, self.sp_gap, self.sp_margin):
+            w.valueChanged.connect(lambda *_: self._timer.start())
+        self.cb_bg.currentIndexChanged.connect(self._bg_fmt)
+        self.update_preview()
+
+    def _bg_fmt(self):
+        if self.BGS[self.cb_bg.currentIndex()][1] is None and self.cb_fmt.currentText() == "JPG":
+            self.cb_fmt.setCurrentText("PNG")          # 투명은 JPG 불가
+
+    def options(self):
+        io_ = self.io
+        return io_.StitchOptions(self.DIRS[self.cb_dir.currentIndex()][1], self.sp_cols.value(),
+                                 self.FITS[self.cb_fit.currentIndex()][1], self.sp_gap.value(),
+                                 self.sp_margin.value(), self.BGS[self.cb_bg.currentIndex()][1])
+
+    def update_preview(self):
+        from app.ui.widgets import pil_thumb_pixmap
+        o = self.options()
+        self.sp_cols.setEnabled(o.direction == self.io.GRID)
+        fmt = self.cb_fmt.currentText()
+        (W, H), _b = self.io.stitch_layout(self.sizes, o)
+        limit = min(o.max_side, self.io.FORMAT_MAX_SIDE.get(fmt, 20000))
+        k = min(1.0, limit / max(W, H))
+        note = f"  → {fmt} 한계로 {round(W * k)} × {round(H * k)} px 로 줄여 저장" if k < 1 else ""
+        self.lb_size.setText(f"결과 크기 {W:,} × {H:,} px{note}")
+        # 미리보기: 축소본으로 같은 배치 (간격·여백도 같은 비율)
+        po = self.io.StitchOptions(o.direction, o.cols, o.fit, round(o.gap * self.k), round(o.margin * self.k),
+                                   o.bg, 4000)
+        im = self.io.stitch_images(self.thumbs, po)
+        if im.mode == "RGBA":                        # 투명 = 체크무늬로 보여주기
+            from PIL import Image
+            bgc = Image.new("RGBA", im.size, (255, 255, 255, 255))
+            for y in range(0, im.height, 12):
+                for x in range((y // 12) % 2 * 12, im.width, 24):
+                    bgc.paste((220, 220, 220, 255), (x, y, x + 12, y + 12))
+            bgc.alpha_composite(im)
+            im = bgc
+        side = max(self.lb_prev.width(), self.lb_prev.height(), 420)
+        self.lb_prev.setPixmap(pil_thumb_pixmap(im, side).scaled(
+            self.lb_prev.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))

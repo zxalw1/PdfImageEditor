@@ -119,6 +119,14 @@ QToolButton[popupMode="1"] {{ padding-right:16px; }}
 QToolButton::menu-button {{ border:none; background:transparent; width:14px; border-top-right-radius:6px; border-bottom-right-radius:6px; }}
 QToolButton::menu-button:hover {{ background:{c['border']}; }}
 QToolButton::menu-arrow {{ image:url({dn}); width:12px; height:12px; }}
+QFrame#ViewBox {{ background:{c['surface']}; border:1px solid {c['border']}; border-radius:6px; }}
+QFrame#ViewSep {{ background:{c['border']}; border:none; }}
+QToolButton#ViewBtn {{ border-radius:4px; padding:0; margin:0 1px; }}
+QToolButton#ViewBtn:checked {{ background:{c['accent_soft']}; }}
+QComboBox#ZoomCombo {{ border:none; background:transparent; padding:0 2px 0 6px; min-height:22px; }}
+QComboBox#ZoomCombo:hover {{ background:{c['hover']}; border-radius:4px; }}
+QLabel#ToolCaption {{ font-size:10pt; background:transparent; }}
+QLabel#ToolCaption:disabled {{ color:{c['text3']}; }}
 
 QPushButton {{ background:{c['surface']}; border:1px solid {c['border']}; border-radius:6px; padding:6px 14px; }}
 QPushButton:hover {{ background:{c['hover']}; }}
@@ -206,6 +214,27 @@ def build_palette(c):
     p.setColor(QPalette.Disabled, QPalette.WindowText, QColor(c['text3']))
     p.setColor(QPalette.Disabled, QPalette.ButtonText, QColor(c['text3']))
     return p
+
+
+_translators = []
+
+
+def install_korean(app):
+    """Qt 기본 버튼·대화상자(저장/취소/예/아니요 등)를 한국어로. 성공 여부 반환"""
+    import sys
+    from PySide6.QtCore import QTranslator, QLibraryInfo
+    import PySide6
+    dirs = [os.path.join(os.path.dirname(PySide6.__file__), "translations"),
+            QLibraryInfo.path(QLibraryInfo.TranslationsPath)]
+    if getattr(sys, "_MEIPASS", None):
+        dirs.insert(0, os.path.join(sys._MEIPASS, "PySide6", "translations"))
+    for d in dirs:
+        t = QTranslator(app)
+        if t.load("qtbase_ko", d):
+            app.installTranslator(t)
+            _translators.append(t)
+            return True
+    return False
 
 
 def apply_theme(app, dark=None):

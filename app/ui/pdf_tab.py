@@ -7,7 +7,7 @@ from PySide6.QtGui import QPixmap, QColor, QAction, QKeySequence, QPainter, QIco
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QToolBar, QToolButton, QLabel, QSpinBox,
     QComboBox, QScrollArea, QListWidgetItem, QMessageBox, QFileDialog, QInputDialog, QColorDialog,
-    QDialog, QMenu, QStackedWidget, QSizePolicy,
+    QDialog, QMenu, QStackedWidget, QSizePolicy, QFrame,
 )
 
 from app import APP_NAME
@@ -215,16 +215,49 @@ class PdfTab(QWidget):
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         tb.addWidget(spacer)
         # 보기
-        self.a_cont = self._act("scroll-view", "", lambda c: self.set_continuous(c), checkable=True,
-                                tip="페이지 이어서 보기 (연속 스크롤)")
-        self.a_zout =self._act("zoom-out", "", lambda: self.step_zoom(-1), "Ctrl+-", tip="축소")
-        self.cb_zoom = QComboBox()
+        # 보기: [이어보기] | [−] [배율 ▾] [+] 를 테두리 상자 하나로 묶고, 아래에 다른 버튼처럼 라벨
+        self.a_cont = self._act("scroll-view", "이어보기", lambda c: self.set_continuous(c), checkable=True,
+                                tip="페이지 이어서 보기 (연속 스크롤)", toolbar=False)
+        self.a_zout = self._act("zoom-out", "축소", lambda: self.step_zoom(-1), "Ctrl+-", tip="축소", toolbar=False)
+        self.a_zin = self._act("zoom-in", "확대", lambda: self.step_zoom(1), "Ctrl+=", tip="확대", toolbar=False)
+        self.cb_zoom = QComboBox(objectName="ZoomCombo")
         self.cb_zoom.addItems(ZOOMS)
         self.cb_zoom.setCurrentText(FIT)
-        self.cb_zoom.setFixedWidth(92)
+        self.cb_zoom.setFixedWidth(84)
+        self.cb_zoom.setToolTip("배율 (Ctrl+휠로도 조절)")
         self.cb_zoom.currentTextChanged.connect(lambda _: (setattr(self, "_jump", True), self.render_preview()))
-        tb.addWidget(self.cb_zoom)
-        self.a_zin = self._act("zoom-in", "", lambda: self.step_zoom(1), "Ctrl+=", tip="확대")
+        self.view_box = QWidget()
+        vb = QVBoxLayout(self.view_box)
+        vb.setContentsMargins(4, 2, 4, 0)
+        vb.setSpacing(3)
+        box = QFrame(objectName="ViewBox")
+        box.setFixedHeight(30)
+        hb = QHBoxLayout(box)
+        hb.setContentsMargins(2, 1, 2, 1)
+        hb.setSpacing(0)
+
+        def vbtn(action):
+            b = QToolButton(objectName="ViewBtn")
+            b.setDefaultAction(action)
+            b.setToolButtonStyle(Qt.ToolButtonIconOnly)
+            b.setIconSize(QSize(18, 18))
+            b.setFixedSize(30, 26)
+            return b
+
+        def vsep():
+            s = QFrame(objectName="ViewSep")
+            s.setFixedSize(1, 18)
+            return s
+        hb.addWidget(vbtn(self.a_cont))
+        hb.addWidget(vsep())
+        hb.addWidget(vbtn(self.a_zout))
+        hb.addWidget(self.cb_zoom)
+        hb.addWidget(vbtn(self.a_zin))
+        vb.addWidget(box)
+        cap = QLabel("보기 · 배율", objectName="ToolCaption")
+        cap.setAlignment(Qt.AlignHCenter)
+        vb.addWidget(cap)
+        tb.addWidget(self.view_box)
 
         # 본문: 빈 화면(드롭존) / 편집 화면
         self.body = QStackedWidget()
@@ -285,7 +318,7 @@ class PdfTab(QWidget):
                              self.a_up, self.a_dn, self.a_ext, self.a_split, self.a_text, self.a_white,
                              self.a_repl, self.a_zin, self.a_zout, self.a_edit, self.a_deco, self.a_pick,
                              self.a_compress, self.a_cont]
-        self.edit_widgets = [self.font_box, self.cb_zoom, self.btn_edit, self.btn_insert, self.btn_annot]
+        self.edit_widgets = [self.font_box, self.view_box, self.btn_edit, self.btn_insert, self.btn_annot]
 
     def _paint_color_btn(self):
         """물방울(테마 글자색) + 아래 막대(선택한 글자 색). 검정도 다크모드에서 보이도록 막대에 테두리"""
@@ -385,8 +418,14 @@ class PdfTab(QWidget):
         self.finish_edit(commit=True)
         if self.doc is None or not self.modified:
             return True
-        r = QMessageBox.question(self, APP_NAME, "변경 내용을 저장할까요?",
-                                 QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
+        mb = QMessageBox(QMessageBox.Question, APP_NAME, "변경 내용을 저장할까요?",
+                         QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel, self)
+        mb.button(QMessageBox.Save).setText("저장")
+        mb.button(QMessageBox.Discard).setText("저장 안 함")      # Qt 번역은 '무시'라 어색
+        mb.button(QMessageBox.Cancel).setText("취소")
+        mb.setDefaultButton(QMessageBox.Save)
+        mb.exec()
+        r = mb.standardButton(mb.clickedButton())
         if r == QMessageBox.Save:
             return self.save()
         return r == QMessageBox.Discard

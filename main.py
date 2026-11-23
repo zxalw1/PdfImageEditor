@@ -53,11 +53,12 @@ def main():
             pass
     from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QApplication
-    from app.ui.theme import apply_theme
+    from app.ui.theme import apply_theme, install_korean
     from app.ui.main_window import MainWindow
 
     app = QApplication(sys.argv)
     apply_theme(app)
+    install_korean(app)                                        # 저장/취소 등 기본 버튼 한글
     if len(sys.argv) > 2 and sys.argv[1] == "--selftest":      # 빌드 검증용
         from app.selftest import run
         sys.exit(run(sys.argv[2]))

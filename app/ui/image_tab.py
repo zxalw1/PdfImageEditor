@@ -5,7 +5,7 @@ import os
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QFormLayout, QLabel, QGroupBox, QComboBox, QSlider,
-    QCheckBox, QSpinBox, QLineEdit, QFileDialog, QMessageBox, QScrollArea, QFrame,
+    QCheckBox, QSpinBox, QLineEdit, QFileDialog, QMessageBox, QScrollArea, QFrame, QDialog,
 )
 
 from app import APP_NAME
@@ -38,10 +38,12 @@ class ImageTab(QWidget):
         hh.addWidget(self.lb_count)
         hh.addStretch()
         self.lst = FileList(IMG_EXT, 56, placeholder="사진·폴더를 여기로 끌어다 놓거나 ‘추가’를 누르세요")
-        for t, ic, s in [("추가", "plus", self.add), ("폴더", "folder-add", self.add_folder),
-                         ("삭제", "minus", lambda: self.lst.remove_selected()),
-                         ("비우기", "trash", lambda: self.lst.clear())]:
-            hh.addWidget(icon_button(t, ic, s))
+        for t, ic, s, tip in [("추가", "plus", self.add, None), ("폴더", "folder-add", self.add_folder, None),
+                              ("", "arrow-up", lambda: self.lst.move_selected(-1), "위로 (이어붙이기 순서)"),
+                              ("", "arrow-down", lambda: self.lst.move_selected(1), "아래로 (이어붙이기 순서)"),
+                              ("삭제", "minus", lambda: self.lst.remove_selected(), None),
+                              ("비우기", "trash", lambda: self.lst.clear(), None)]:
+            hh.addWidget(icon_button(t, ic, s, tip=tip))
         lv.addLayout(hh)
         self.lst.filesDropped.connect(self.lst.add_files)
         self.lst.currentItemChanged.connect(self.show_preview)
@@ -49,7 +51,13 @@ class ImageTab(QWidget):
         lv.addWidget(self.lst, 1)
         hint = QLabel("JPG·PNG·WEBP·BMP·TIFF·GIF·ICO" + (" ·HEIC" if HEIF else "  (HEIC: pip install pillow-heif)"),
                       objectName="Caption")
-        lv.addWidget(hint)
+        bot = QHBoxLayout()
+        bot.addWidget(hint)
+        bot.addStretch()
+        self.btn_stitch = icon_button("사진 이어붙이기…", "stitch", self.stitch, kind=None,
+                                      tip="여러 장을 한 장으로 (세로·가로·격자). 2장 이상 선택하면 선택한 것만")
+        bot.addWidget(self.btn_stitch)
+        lv.addLayout(bot)
         h.addWidget(left, 3)
 
         # 오른쪽: 미리보기 + 옵션 (스크롤)
@@ -200,6 +208,44 @@ class ImageTab(QWidget):
             self.info.setText(f"{os.path.basename(p)}\n{w}×{h}px · {human(os.path.getsize(p))} · {fmt} · {im.mode}")
         except Exception as ex:
             self.preview.setText(f"열 수 없음\n{ex}")
+
+    def stitch(self):
+        from app.ui.dialogs import StitchDialog
+        from app.core.image_ops import stitch_files
+        sel = self.lst.selected_paths()
+        paths = sel if len(sel) >= 2 else self.lst.paths()
+        if len(paths) < 2:
+            QMessageBox.information(self, APP_NAME, "이어붙일 사진을 2장 이상 추가하세요.")
+            return
+        try:
+            dlg = StitchDialog(paths, self)
+        except Exception as ex:
+            QMessageBox.warning(self, APP_NAME, f"사진을 열 수 없습니다\n{ex}")
+            return
+        if dlg.exec() != QDialog.Accepted:
+            return
+        fmt, o = dlg.cb_fmt.currentText(), dlg.options()
+        q = dlg.sp_q.value()
+        tkb = dlg.sp_target.value() if dlg.cb_target.isChecked() else 0
+        ext = {"JPG": ".jpg", "PNG": ".png", "WEBP": ".webp"}[fmt]
+        first = os.path.splitext(os.path.basename(paths[0]))[0]
+        dst, _ = QFileDialog.getSaveFileName(self, "이어붙인 사진 저장",
+                                             os.path.join(os.path.dirname(paths[0]), f"{first}_이어붙임{ext}"),
+                                             f"{fmt} (*{ext})")
+        if not dst:
+            return
+        if not dst.lower().endswith(ext):
+            dst += ext
+        try:
+            size, (w, h) = run_task(self, "사진 이어붙이는 중...", len(paths),
+                                    lambda t: stitch_files(paths, dst, fmt, o, q, tkb, t), busy_cursor=True)
+        except InterruptedError:
+            return
+        except Exception as ex:
+            QMessageBox.warning(self, APP_NAME, f"이어붙이기 실패\n{ex}")
+            return
+        self.win.toast(f"{len(paths)}장 이어붙임 · {w}×{h}px · {human(size)}")
+        QMessageBox.information(self, APP_NAME, f"{len(paths)}장을 한 장으로 저장했습니다\n{w} × {h} px · {human(size)}\n{dst}")
 
     def options(self):
         return TransformOptions(

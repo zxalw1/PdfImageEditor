@@ -11,7 +11,7 @@ from app import APP_NAME
 from app.core.utils import IMG_EXT, PDF_EXT, IMG_FILTER, PDF_FILTER, parse_ranges, human, with_ext
 from app.core import pdf_ops
 from app.core.convert_ops import (
-    PdfImageJob, pdf_to_images, images_to_pdf_each, images_to_pdf_single, office_to_pdf,
+    PdfImageJob, pdf_to_images, pdf_to_single_images, images_to_pdf_each, images_to_pdf_single, office_to_pdf,
     pdfs_to_docs, PDF_DOC_TARGETS,
 )
 from app.core.office_com import OFFICE_EXT, OFFICE_FILTER, detect_engines
@@ -45,6 +45,9 @@ class Pdf2ImgPanel(_Panel):
         super().__init__(win, exts=PDF_EXT, icon=32, thumbs=False, extra=False, run_text="이미지로 변환",
                          file_filter=PDF_FILTER, dialog_title="PDF 선택")
         f = self.form
+        self.cb_mode = QComboBox()
+        self.cb_mode.addItems(["페이지마다 이미지 1장씩", "PDF 전체를 이미지 1장으로 (세로로 이어붙이기)"])
+        f.addRow("저장 방식", self.cb_mode)
         self.ed_pages = QLineEdit()
         self.ed_pages.setPlaceholderText("비우면 전체 (예: 1-3, 5)")
         f.addRow("페이지", self.ed_pages)
@@ -62,6 +65,23 @@ class Pdf2ImgPanel(_Panel):
         f.addRow("품질(JPG/WEBP)", self.sp_q)
         row, self.ed_out = dir_row(self, "비우면 PDF 폴더\\PDF파일명 폴더")
         f.addRow("저장 위치", row)
+        self.lb_mode = _caption("")
+        self.extra_box.addWidget(self.lb_mode)
+        self.cb_mode.currentIndexChanged.connect(self._mode_ui)
+        self._mode_ui()
+
+    @property
+    def single(self):
+        return self.cb_mode.currentIndex() == 1
+
+    def _mode_ui(self):
+        if self.single:
+            self.ed_out.setPlaceholderText("비우면 PDF 와 같은 폴더")
+            self.lb_mode.setText("PDF 하나당 이미지 1장(파일명_전체)으로 저장합니다. 페이지 사이에 옅은 구분 간격이 들어가고, "
+                                 "너무 길면(JPG 65500px·WEBP 16383px 초과) 해상도를 자동으로 낮춥니다.")
+        else:
+            self.ed_out.setPlaceholderText("비우면 PDF 폴더\\PDF파일명 폴더")
+            self.lb_mode.setText("")
 
     def run(self):
         paths = self.lst.paths()
@@ -69,6 +89,7 @@ class Pdf2ImgPanel(_Panel):
             QMessageBox.information(self, APP_NAME, "PDF 파일을 추가하세요.")
             return
         fmt, dpi, q = self.cb_fmt.currentText(), self.sp_dpi.value(), self.sp_q.value()
+        single = self.single
         txt = self.ed_pages.text().strip()
         # 암호 입력·범위 검사는 UI 스레드에서 먼저 처리
         jobs, errs, last = [], [], ""
@@ -79,18 +100,23 @@ class Pdf2ImgPanel(_Panel):
                 n = doc.page_count
                 pages = [i for g in parse_ranges(txt, n) for i in g] if txt else list(range(n))
                 base = os.path.splitext(name)[0]
-                out = self.ed_out.text().strip() or os.path.join(os.path.dirname(p), base)
+                out = self.ed_out.text().strip() or (os.path.dirname(p) if single else os.path.join(os.path.dirname(p), base))
                 last = out
                 jobs.append(PdfImageJob(doc, name, pages, out, base, max(3, len(str(n)))))
             except Exception as ex:
                 errs.append(f"{name}: {ex}")
-        total = 0
+        total, notes = 0, []
         if jobs:
-            total, e2 = run_task(self, "변환 중...", sum(len(j.pages) for j in jobs),
-                                 lambda t: pdf_to_images(jobs, fmt, dpi, q, t))
+            if single:
+                total, e2, notes = run_task(self, "변환 중...", sum(len(j.pages) for j in jobs),
+                                            lambda t: pdf_to_single_images(jobs, fmt, dpi, q, task=t))
+            else:
+                total, e2 = run_task(self, "변환 중...", sum(len(j.pages) for j in jobs),
+                                     lambda t: pdf_to_images(jobs, fmt, dpi, q, t))
             errs += e2
-        self.toast(f"이미지 {total}개 저장 완료", ok=total > 0 or not errs)
-        msg = f"이미지 {total}개 저장 완료" + (f"\n{last}" if last else "")
+        what = f"PDF {total}개를 이미지 1장씩으로" if single else f"이미지 {total}개"
+        self.toast(f"{what} 저장 완료", ok=total > 0 or not errs)
+        msg = f"{what} 저장 완료" + (f"\n{last}" if last else "") + ("\n\n" + "\n".join(notes) if notes else "")
         QMessageBox.information(self, APP_NAME, msg + _fail_text(errs))
 
 

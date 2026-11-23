@@ -183,3 +183,112 @@ def batch_convert(paths, fmt_sel, quality, target_kb, suffix, out_dir, opts: Tra
             res.errors.append(f"{os.path.basename(p)}: {ex}")
         task.report(i + 1)
     return res
+
+
+# ── 사진 이어붙이기 ──
+VERTICAL, HORIZONTAL, GRID = "vertical", "horizontal", "grid"
+FIT_MIN, FIT_MAX, FIT_NONE = "min", "max", "none"
+FORMAT_MAX_SIDE = {"JPG": 65500, "WEBP": 16383, "PNG": 100000, "BMP": 30000, "TIFF": 100000,
+                   "GIF": 65535, "ICO": 256}
+
+
+@dataclass
+class StitchOptions:
+    direction: str = VERTICAL     # vertical(아래로) / horizontal(옆으로) / grid(격자)
+    cols: int = 2                 # 격자 열 수
+    fit: str = FIT_MIN            # 세로: 폭을 / 가로: 높이를 / 격자: 칸 크기를  min·max 에 맞춤, none=원본
+    gap: int = 0                  # 사진 사이 간격(px)
+    margin: int = 0               # 바깥 여백(px)
+    bg: tuple = (255, 255, 255)   # 배경색 (None = 투명)
+    max_side: int = 20000         # 결과 최대 변(px) — 넘으면 전체를 비율대로 줄임
+
+
+def _stitch_sizes(sizes, o: StitchOptions):
+    """각 사진의 붙일 크기 [(w, h)] 계산 (비율 유지)"""
+    if o.fit == FIT_NONE:
+        return list(sizes)
+    pick = min if o.fit == FIT_MIN else max
+    out = []
+    if o.direction == VERTICAL:
+        tw = pick(w for w, _ in sizes)
+        out = [(tw, max(1, round(h * tw / w))) for w, h in sizes]
+    elif o.direction == HORIZONTAL:
+        th = pick(h for _, h in sizes)
+        out = [(max(1, round(w * th / h)), th) for w, h in sizes]
+    else:                                     # 격자: 칸 = 기준 폭, 사진은 칸 안에 맞춤
+        cw = pick(w for w, _ in sizes)
+        out = [(cw, max(1, round(h * cw / w))) for w, h in sizes]
+    return out
+
+
+def stitch_layout(sizes, o: StitchOptions):
+    """(전체 크기, 각 사진 위치·크기 [(x, y, w, h)]) — 그리기 전에 미리 계산 (미리보기·크기 검사용)"""
+    s = _stitch_sizes(sizes, o)
+    g, m = max(0, o.gap), max(0, o.margin)
+    boxes = []
+    if o.direction == VERTICAL:
+        W = max(w for w, _ in s)
+        y = m
+        for w, h in s:
+            boxes.append(((W - w) // 2 + m, y, w, h))
+            y += h + g
+        total = (W + 2 * m, y - g + m)
+    elif o.direction == HORIZONTAL:
+        H = max(h for _, h in s)
+        x = m
+        for w, h in s:
+            boxes.append((x, (H - h) // 2 + m, w, h))
+            x += w + g
+        total = (x - g + m, H + 2 * m)
+    else:
+        cols = max(1, min(o.cols, len(s)))
+        cw = max(w for w, _ in s)
+        rows = [s[i:i + cols] for i in range(0, len(s), cols)]
+        y = m
+        for r in rows:
+            rh = max(h for _, h in r)
+            for k, (w, h) in enumerate(r):
+                boxes.append((m + k * (cw + g) + (cw - w) // 2, y + (rh - h) // 2, w, h))
+            y += rh + g
+        total = (m * 2 + cols * cw + (cols - 1) * g, y - g + m)
+    return total, boxes
+
+
+def stitch_images(images, o: StitchOptions, task=None):
+    """PIL 이미지 목록을 한 장으로. max_side 를 넘으면 전체를 같은 비율로 줄여서 그림"""
+    task = task_or_null(task)
+    if not images:
+        raise ValueError("이어붙일 사진이 없습니다")
+    (W, H), boxes = stitch_layout([im.size for im in images], o)
+    k = min(1.0, o.max_side / max(W, H))
+    orig = boxes
+    while max(W, H) > o.max_side:            # 크기 줄여서 다시 배치 (간격·여백도 같이, 내림으로 한계 안 넘게)
+        small = StitchOptions(o.direction, o.cols, FIT_NONE, int(o.gap * k), int(o.margin * k), o.bg, o.max_side)
+        sizes = [(max(1, int(w * k)), max(1, int(h * k))) for (_x, _y, w, h) in orig]
+        (W, H), boxes = stitch_layout(sizes, small)
+        k *= 0.999
+    transparent = o.bg is None
+    canvas = Image.new("RGBA" if transparent else "RGB", (W, H), (0, 0, 0, 0) if transparent else tuple(o.bg))
+    for i, (im, (x, y, w, h)) in enumerate(zip(images, boxes)):
+        if task.cancelled():
+            raise InterruptedError("취소했습니다")
+        task.report(i, f"{i + 1}/{len(images)} 붙이는 중...")
+        src = im if im.mode in ("RGB", "RGBA") else im.convert("RGBA")
+        if src.size != (w, h):
+            src = src.resize((w, h), Image.LANCZOS)
+        if src.mode == "RGBA":
+            canvas.paste(src, (x, y), src)
+        else:
+            canvas.paste(src, (x, y))
+        task.report(i + 1)
+    return canvas
+
+
+def stitch_files(paths, dst, fmt, o: StitchOptions, quality=90, target_kb=0, task=None):
+    """파일들을 이어붙여 저장. (저장 크기 bytes, (가로, 세로)) 반환"""
+    limit = FORMAT_MAX_SIDE.get(fmt, 20000)
+    o = StitchOptions(**{**o.__dict__, "max_side": min(o.max_side, limit)})
+    images = [open_image(p) for p in paths]
+    out = stitch_images(images, o, task)
+    size = save_image(out, dst, fmt, quality, target_kb)
+    return size, out.size

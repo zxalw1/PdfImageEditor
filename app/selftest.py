@@ -39,6 +39,14 @@ def run(out_path):
         return ",".join(sorted(f))
     check("Qt 이미지 형식(svg/jpg/png/ico)", formats)
 
+    def korean_buttons():
+        from PySide6.QtWidgets import QMessageBox
+        mb = QMessageBox(QMessageBox.Question, "t", "t", QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
+        texts = [b.text().replace("&", "") for b in mb.buttons()]
+        assert "저장" in texts and "취소" in texts, texts
+        return ", ".join(texts)
+    check("기본 버튼 한글(저장·취소)", korean_buttons)
+
     def icons():
         from app.ui import theme
         pm = theme.svg_pixmap("save", "#000000", 24)
